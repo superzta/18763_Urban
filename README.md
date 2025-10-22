@@ -226,22 +226,6 @@ Training curves are automatically generated and saved to `results/training_curve
 - Check data quality and annotations
 - Try different learning rates
 
-## Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@misc{ruidr2024,
-  title={RUIDR: Real-Time Urban Issue Detection and Ranking},
-  author={Zhang, Jiadong and Zeng, Owen and Lu, Maochuan},
-  year={2024},
-  institution={Carnegie Mellon University}
-}
-```
-
-## License
-
-This project is licensed under the MIT License.
 
 ## Authors
 
