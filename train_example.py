@@ -30,7 +30,8 @@ def main():
     config.pretrained = True  # Use ImageNet pretrained weights
     
     # Training hyperparameters
-    config.num_epochs = 50
+    # config.num_epochs = 50
+    config.num_epochs = 5
     config.batch_size = 4
     config.learning_rate = 0.005
     config.momentum = 0.9

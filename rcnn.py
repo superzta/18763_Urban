@@ -168,6 +168,12 @@ class YOLODataset(Dataset):
                         continue
                     
                     class_id, x_center, y_center, width, height = map(float, parts)
+                    class_id = int(class_id)
+                    
+                    # Validate class_id is in valid range [0, 1] for 2-class dataset
+                    # Skip invalid labels to prevent CUDA assertion errors
+                    if class_id < 0 or class_id >= 2:
+                        continue
                     
                     # Convert YOLO format to [x_min, y_min, x_max, y_max]
                     x_center *= img_width
@@ -181,7 +187,7 @@ class YOLODataset(Dataset):
                     y_max = y_center + height / 2
                     
                     boxes.append([x_min, y_min, x_max, y_max])
-                    labels.append(int(class_id) + 1)  # +1 because 0 is background
+                    labels.append(class_id + 1)  # +1 because 0 is background
         
         # Convert to tensors
         if len(boxes) == 0:
