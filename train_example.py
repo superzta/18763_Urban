@@ -31,7 +31,7 @@ def main():
     
     # Training hyperparameters
     # config.num_epochs = 50
-    config.num_epochs = 5
+    config.num_epochs = 1
     config.batch_size = 4
     config.learning_rate = 0.005
     config.momentum = 0.9

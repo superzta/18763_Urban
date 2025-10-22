@@ -170,6 +170,11 @@ class YOLODataset(Dataset):
                     class_id, x_center, y_center, width, height = map(float, parts)
                     class_id = int(class_id)
                     
+                    # Dataset uses class_id = 3, remap to 0 (damaged road signs)
+                    # This handles dataset labeling inconsistency
+                    if class_id == 3:
+                        class_id = 0
+                    
                     # Validate class_id is in valid range [0, 1] for 2-class dataset
                     # Skip invalid labels to prevent CUDA assertion errors
                     if class_id < 0 or class_id >= 2:
@@ -503,6 +508,119 @@ def compute_iou(box1, box2):
     return inter_area / union_area if union_area > 0 else 0
 
 
+def create_evaluation_visualizations(images, predictions, ground_truths, config, num_samples=10):
+    """Create visualizations comparing predictions vs ground truth."""
+    
+    # Load class names
+    with open(config.data_yaml, 'r') as f:
+        data_config = yaml.safe_load(f)
+    class_names = ['background'] + data_config['names']
+    
+    # Select samples with ground truth boxes
+    samples_to_viz = []
+    for i, gt in enumerate(ground_truths):
+        if len(gt['boxes']) > 0:
+            samples_to_viz.append(i)
+        if len(samples_to_viz) >= num_samples:
+            break
+    
+    if not samples_to_viz:
+        print("No samples with ground truth boxes found for visualization")
+        return
+    
+    # Create comparison visualizations
+    for idx, sample_idx in enumerate(samples_to_viz):
+        img_tensor = images[sample_idx]
+        pred = predictions[sample_idx]
+        gt = ground_truths[sample_idx]
+        
+        # Convert tensor to PIL Image
+        img = F.to_pil_image(img_tensor)
+        
+        # Create figure with 3 subplots: Ground Truth, Predictions, Both
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        
+        # Ground Truth
+        axes[0].imshow(img)
+        axes[0].set_title(f'Ground Truth ({len(gt["boxes"])} boxes)', fontsize=12, fontweight='bold')
+        for box, label in zip(gt['boxes'], gt['labels']):
+            x_min, y_min, x_max, y_max = box.numpy()
+            width = x_max - x_min
+            height = y_max - y_min
+            rect = patches.Rectangle(
+                (x_min, y_min), width, height,
+                linewidth=2, edgecolor='lime', facecolor='none'
+            )
+            axes[0].add_patch(rect)
+            axes[0].text(
+                x_min, y_min - 5,
+                f"GT: {class_names[label]}",
+                color='white', fontsize=9,
+                bbox=dict(facecolor='lime', alpha=0.7, edgecolor='none', pad=2)
+            )
+        axes[0].axis('off')
+        
+        # Predictions (filtered by confidence)
+        mask = pred['scores'] > config.conf_threshold
+        pred_boxes = pred['boxes'][mask]
+        pred_labels = pred['labels'][mask]
+        pred_scores = pred['scores'][mask]
+        
+        axes[1].imshow(img)
+        axes[1].set_title(f'Predictions ({len(pred_boxes)} boxes, conf>{config.conf_threshold})', 
+                         fontsize=12, fontweight='bold')
+        for box, label, score in zip(pred_boxes, pred_labels, pred_scores):
+            x_min, y_min, x_max, y_max = box.numpy()
+            width = x_max - x_min
+            height = y_max - y_min
+            rect = patches.Rectangle(
+                (x_min, y_min), width, height,
+                linewidth=2, edgecolor='red', facecolor='none'
+            )
+            axes[1].add_patch(rect)
+            axes[1].text(
+                x_min, y_min - 5,
+                f"Pred: {class_names[label]} ({score:.2f})",
+                color='white', fontsize=9,
+                bbox=dict(facecolor='red', alpha=0.7, edgecolor='none', pad=2)
+            )
+        axes[1].axis('off')
+        
+        # Both overlaid
+        axes[2].imshow(img)
+        axes[2].set_title('Ground Truth (Green) vs Predictions (Red)', fontsize=12, fontweight='bold')
+        
+        # Draw ground truth in green
+        for box, label in zip(gt['boxes'], gt['labels']):
+            x_min, y_min, x_max, y_max = box.numpy()
+            width = x_max - x_min
+            height = y_max - y_min
+            rect = patches.Rectangle(
+                (x_min, y_min), width, height,
+                linewidth=2, edgecolor='lime', facecolor='none', linestyle='--'
+            )
+            axes[2].add_patch(rect)
+        
+        # Draw predictions in red
+        for box, label, score in zip(pred_boxes, pred_labels, pred_scores):
+            x_min, y_min, x_max, y_max = box.numpy()
+            width = x_max - x_min
+            height = y_max - y_min
+            rect = patches.Rectangle(
+                (x_min, y_min), width, height,
+                linewidth=2, edgecolor='red', facecolor='none'
+            )
+            axes[2].add_patch(rect)
+        axes[2].axis('off')
+        
+        plt.tight_layout()
+        save_path = os.path.join(config.results_dir, f'eval_comparison_{idx+1}.png')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+    
+    print(f"Saved {len(samples_to_viz)} comparison visualizations to {config.results_dir}/eval_comparison_*.png")
+
+
 @torch.no_grad()
 def evaluate(model, data_loader, device, config):
     """Evaluate model on test set."""
@@ -514,10 +632,14 @@ def evaluate(model, data_loader, device, config):
     
     all_predictions = []
     all_ground_truths = []
+    all_images = []
     
     pbar = tqdm(data_loader, desc="Evaluating")
     
     for images, targets in pbar:
+        # Store images for visualization
+        all_images.extend([img.cpu() for img in images])
+        
         images = list(img.to(device) for img in images)
         
         # Get predictions
@@ -545,6 +667,13 @@ def evaluate(model, data_loader, device, config):
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"\nResults saved to {results_path}")
+    
+    # Create visualizations comparing predictions vs ground truth
+    print("\nCreating evaluation visualizations...")
+    create_evaluation_visualizations(
+        all_images, all_predictions, all_ground_truths, 
+        config, num_samples=10
+    )
     
     return results
 
