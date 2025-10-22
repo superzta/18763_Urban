@@ -1,5 +1,6 @@
 """
-Retrain and Visualize - Complete workflow with proper class ID mapping
+Retrain and Visualize - Complete workflow for urban issue detection
+Supports training on single or multiple urban issue classes (0-9)
 """
 
 from rcnn import Config, train, test
@@ -9,25 +10,48 @@ import shutil
 
 def main():
     print("=" * 80)
-    print("RUIDR - Retrain with Fixed Class ID Mapping")
+    print("RUIDR - Urban Issue Detection Training")
     print("=" * 80)
-    print("\nThis will:")
-    print("  1. Train model with corrected class ID mapping (3 → 0)")
-    print("  2. Test on test set")
-    print("  3. Generate visualizations comparing predictions vs ground truth")
+    print("\nAvailable urban issue classes (0-9):")
+    print("  0: Damaged Road issues")
+    print("  1: Pothole Issues")
+    print("  2: Illegal Parking Issues")
+    print("  3: Broken Road Sign Issues (DEFAULT)")
+    print("  4: Fallen trees")
+    print("  5: Littering/Garbage on Public Places")
+    print("  6: Vandalism Issues")
+    print("  7: Dead Animal Pollution")
+    print("  8: Damaged concrete structures")
+    print("  9: Damaged Electric wires and poles")
     print()
+    
+    # Select classes to train on
+    print("Enter class IDs to train on (comma-separated, e.g., '3' or '0,1,3'):")
+    print("Press Enter for default (class 3 - Broken Road Signs)")
+    user_input = input("Classes: ").strip()
+    
+    if user_input:
+        try:
+            urban_classes = [int(x.strip()) for x in user_input.split(',')]
+        except:
+            print("Invalid input, using default [3]")
+            urban_classes = [3]
+    else:
+        urban_classes = [3]
+    
+    print(f"\nSelected classes: {urban_classes}")
     
     # Clean old results
     if os.path.exists('checkpoints'):
-        response = input("Delete old checkpoints? (y/n): ").lower()
+        response = input("\nDelete old checkpoints? (y/n): ").lower()
         if response == 'y':
             shutil.rmtree('checkpoints')
             os.makedirs('checkpoints')
             print("✓ Deleted old checkpoints")
     
-    # Create config
-    config = Config()
-    config.num_epochs = 2  # Quick retrain for demo
+    # Create config with selected classes
+    config = Config(urban_issue_classes=urban_classes)
+    config.num_epochs = 1  # Quick training for demo
     config.batch_size = 4
     config.learning_rate = 0.005
     config.conf_threshold = 0.3  # Lower threshold to see more detections

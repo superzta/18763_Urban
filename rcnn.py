@@ -39,14 +39,40 @@ from datetime import datetime
 class Config:
     """Configuration class for managing all hyperparameters and settings."""
     
-    def __init__(self):
-        # Dataset paths
-        self.data_root = "data/DamagedRoadSigns/DamagedRoadSigns"
-        self.data_yaml = "data/DamagedRoadSigns/DamagedRoadSigns/data.yaml"
+    # Map urban issue class ID to dataset folder
+    URBAN_ISSUE_DATASETS = {
+        0: ("Potholes and RoadCracks", "Damaged Road issues"),
+        1: ("Potholes and RoadCracks", "Pothole Issues"),
+        2: ("IllegalParking", "Illegal Parking Issues"),
+        3: ("DamagedRoadSigns", "Broken Road Sign Issues"),
+        4: ("FallenTrees", "Fallen trees"),
+        5: ("Garbage", "Littering/Garbage on Public Places"),
+        6: ("Graffitti", "Vandalism Issues"),
+        7: ("DeadAnimalsPollution", "Dead Animal Pollution"),
+        8: ("Damaged concrete structures", "Damaged concrete structures"),
+        9: ("DamagedElectricalPoles", "Damaged Electric wires and poles")
+    }
+    
+    def __init__(self, urban_issue_classes=[3]):
+        """
+        Initialize configuration.
         
-        # Model hyperparameters
-        self.num_classes = 3  # background + 2 classes (Damage, Healthy)
-        self.backbone = "resnet50"  # or resnet101
+        Args:
+            urban_issue_classes: List of urban issue classes to train on (0-9)
+                Default: [3] (Broken Road Sign Issues)
+                Can be multiple: [0, 1, 3] for multiple issue types
+        """
+        # Validate classes
+        for cls_id in urban_issue_classes:
+            if cls_id not in self.URBAN_ISSUE_DATASETS:
+                raise ValueError(f"Invalid class {cls_id}. Must be 0-9.")
+        
+        self.urban_issue_classes = sorted(urban_issue_classes)
+        self.main_config_yaml = "data/config.yaml"
+        
+        # Model hyperparameters - will be set based on selected classes
+        self.num_classes = len(self.urban_issue_classes) + 1  # +1 for background
+        self.backbone = "resnet50"
         self.pretrained = True
         
         # Training hyperparameters
@@ -111,37 +137,61 @@ class Config:
 # Dataset Loader for YOLO Format
 # ============================================================================
 
-class YOLODataset(Dataset):
+class MultiClassUrbanDataset(Dataset):
     """
-    Custom Dataset for loading YOLO format annotations.
-    
-    YOLO format: <class_id> <x_center> <y_center> <width> <height>
-    All values are normalized to [0, 1].
+    Combined dataset loader for multiple urban issue classes.
+    Handles loading from multiple subdatasets and mapping to global class IDs.
     """
     
-    def __init__(self, root_dir: str, split: str = 'train', transforms=None):
+    def __init__(self, config: 'Config', split: str = 'train', transforms=None):
         """
         Args:
-            root_dir: Root directory of the dataset
+            config: Config object with urban_issue_classes specified
             split: 'train', 'valid', or 'test'
             transforms: Optional transforms to apply
         """
-        self.root_dir = Path(root_dir)
+        self.config = config
         self.split = split
         self.transforms = transforms
         
-        self.image_dir = self.root_dir / split / 'images'
-        self.label_dir = self.root_dir / split / 'labels'
+        # Load main config to get class names
+        with open(config.main_config_yaml, 'r') as f:
+            main_config = yaml.safe_load(f)
+        self.global_class_names = main_config['names']
         
-        # Get all image files
-        self.image_files = sorted(list(self.image_dir.glob('*.jpg')) + 
-                                 list(self.image_dir.glob('*.png')) +
-                                 list(self.image_dir.glob('*.jpeg')))
+        # Build dataset: collect all images from selected classes
+        self.samples = []  # List of (image_path, label_path, global_class_id)
         
-        print(f"Loaded {len(self.image_files)} images from {split} split")
+        for global_class_id in config.urban_issue_classes:
+            folder_name, class_name = config.URBAN_ISSUE_DATASETS[global_class_id]
+            dataset_root = Path(f"data/{folder_name}/{folder_name}")
+            
+            image_dir = dataset_root / split / 'images'
+            label_dir = dataset_root / split / 'labels'
+            
+            if not image_dir.exists():
+                print(f"Warning: {image_dir} not found, skipping class {global_class_id}")
+                continue
+            
+            # Get all images for this class
+            image_files = sorted(list(image_dir.glob('*.jpg')) + 
+                                list(image_dir.glob('*.png')) +
+                                list(image_dir.glob('*.jpeg')))
+            
+            for img_path in image_files:
+                label_path = label_dir / (img_path.stem + '.txt')
+                self.samples.append((img_path, label_path, global_class_id))
+            
+            print(f"  Class {global_class_id} ({class_name}): {len(image_files)} images")
+        
+        print(f"Loaded total {len(self.samples)} images from {split} split")
+        
+        # Create mapping from global class ID to model output index
+        # Model outputs: 0=background, 1=first selected class, 2=second selected class, etc.
+        self.global_to_model_idx = {global_cls: i+1 for i, global_cls in enumerate(config.urban_issue_classes)}
     
     def __len__(self):
-        return len(self.image_files)
+        return len(self.samples)
     
     def __getitem__(self, idx: int):
         """
@@ -149,13 +199,11 @@ class YOLODataset(Dataset):
             image: PIL Image
             target: dict with keys 'boxes', 'labels', 'image_id', 'area', 'iscrowd'
         """
+        img_path, label_path, expected_global_class = self.samples[idx]
+        
         # Load image
-        img_path = self.image_files[idx]
         image = Image.open(img_path).convert('RGB')
         img_width, img_height = image.size
-        
-        # Load corresponding label file
-        label_path = self.label_dir / (img_path.stem + '.txt')
         
         boxes = []
         labels = []
@@ -167,18 +215,22 @@ class YOLODataset(Dataset):
                     if len(parts) != 5:
                         continue
                     
-                    class_id, x_center, y_center, width, height = map(float, parts)
-                    class_id = int(class_id)
+                    local_class_id, x_center, y_center, width, height = map(float, parts)
+                    local_class_id = int(local_class_id)
                     
-                    # Dataset uses class_id = 3, remap to 0 (damaged road signs)
-                    # This handles dataset labeling inconsistency
-                    if class_id == 3:
-                        class_id = 0
+                    # The label file contains local class IDs specific to this subdataset
+                    # We need to map them to the global class ID
+                    # For most subdatasets, all labels should map to the same global class
+                    # (e.g., all labels in DamagedRoadSigns folder are class 3)
                     
-                    # Validate class_id is in valid range [0, 1] for 2-class dataset
-                    # Skip invalid labels to prevent CUDA assertion errors
-                    if class_id < 0 or class_id >= 2:
-                        continue
+                    # Use the expected global class for this image
+                    global_class_id = expected_global_class
+                    
+                    # Map global class ID to model output index
+                    if global_class_id not in self.global_to_model_idx:
+                        continue  # Skip if this class wasn't selected for training
+                    
+                    model_class_idx = self.global_to_model_idx[global_class_id]
                     
                     # Convert YOLO format to [x_min, y_min, x_max, y_max]
                     x_center *= img_width
@@ -192,7 +244,7 @@ class YOLODataset(Dataset):
                     y_max = y_center + height / 2
                     
                     boxes.append([x_min, y_min, x_max, y_max])
-                    labels.append(class_id + 1)  # +1 because 0 is background
+                    labels.append(model_class_idx)
         
         # Convert to tensors
         if len(boxes) == 0:
@@ -324,18 +376,26 @@ def train(config: Config):
     print("=" * 80)
     print("Starting Training")
     print("=" * 80)
-    print(f"\nConfiguration:\n{config}\n")
     
-    # Load class names from data.yaml
-    with open(config.data_yaml, 'r') as f:
-        data_config = yaml.safe_load(f)
-    class_names = ['background'] + data_config['names']
-    print(f"Classes: {class_names}\n")
+    # Load main config for class names
+    with open(config.main_config_yaml, 'r') as f:
+        main_config = yaml.safe_load(f)
+    
+    # Build class names list: background + selected classes
+    selected_class_names = ['background']
+    for cls_id in config.urban_issue_classes:
+        selected_class_names.append(main_config['names'][cls_id])
+    
+    print(f"Training on {len(config.urban_issue_classes)} urban issue class(es):")
+    for cls_id in config.urban_issue_classes:
+        print(f"  Class {cls_id}: {main_config['names'][cls_id]}")
+    print(f"\nModel classes: {selected_class_names}")
+    print(f"Number of classes (including background): {config.num_classes}\n")
     
     # Create datasets
     print("Loading datasets...")
-    train_dataset = YOLODataset(config.data_root, split='train')
-    valid_dataset = YOLODataset(config.data_root, split='valid')
+    train_dataset = MultiClassUrbanDataset(config, split='train')
+    valid_dataset = MultiClassUrbanDataset(config, split='valid')
     
     # Create data loaders
     train_loader = DataLoader(
@@ -511,10 +571,14 @@ def compute_iou(box1, box2):
 def create_evaluation_visualizations(images, predictions, ground_truths, config, num_samples=10):
     """Create visualizations comparing predictions vs ground truth."""
     
-    # Load class names
-    with open(config.data_yaml, 'r') as f:
-        data_config = yaml.safe_load(f)
-    class_names = ['background'] + data_config['names']
+    # Load main config for class names
+    with open(config.main_config_yaml, 'r') as f:
+        main_config = yaml.safe_load(f)
+    
+    # Build class names list for selected classes
+    class_names = ['background']
+    for cls_id in config.urban_issue_classes:
+        class_names.append(main_config['names'][cls_id])
     
     # Select samples with ground truth boxes
     samples_to_viz = []
@@ -751,14 +815,23 @@ def test(config: Config, checkpoint_path: str):
     print("Testing Model")
     print("=" * 80)
     
-    # Load class names
-    with open(config.data_yaml, 'r') as f:
-        data_config = yaml.safe_load(f)
-    class_names = ['background'] + data_config['names']
+    # Load main config for class names
+    with open(config.main_config_yaml, 'r') as f:
+        main_config = yaml.safe_load(f)
+    
+    # Build class names list
+    class_names = ['background']
+    for cls_id in config.urban_issue_classes:
+        class_names.append(main_config['names'][cls_id])
+    
+    print(f"Testing on {len(config.urban_issue_classes)} urban issue class(es):")
+    for cls_id in config.urban_issue_classes:
+        print(f"  Class {cls_id}: {main_config['names'][cls_id]}")
+    print()
     
     # Create test dataset
     print("Loading test dataset...")
-    test_dataset = YOLODataset(config.data_root, split='test')
+    test_dataset = MultiClassUrbanDataset(config, split='test')
     test_loader = DataLoader(
         test_dataset,
         batch_size=config.batch_size,
@@ -791,10 +864,14 @@ def inference(config: Config, checkpoint_path: str, image_path: str, save_path: 
     print("Running Inference")
     print("=" * 80)
     
-    # Load class names
-    with open(config.data_yaml, 'r') as f:
-        data_config = yaml.safe_load(f)
-    class_names = ['background'] + data_config['names']
+    # Load main config for class names
+    with open(config.main_config_yaml, 'r') as f:
+        main_config = yaml.safe_load(f)
+    
+    # Build class names list
+    class_names = ['background']
+    for cls_id in config.urban_issue_classes:
+        class_names.append(main_config['names'][cls_id])
     
     # Load model
     print(f"Loading model from {checkpoint_path}...")
