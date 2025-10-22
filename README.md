@@ -184,14 +184,14 @@ We use **Faster R-CNN** with a **ResNet-50-FPN** backbone:
 
 ## Features
 
-✅ **Easy to use**: Simple command-line interface  
-✅ **Flexible**: Easily adjustable hyperparameters  
-✅ **Comprehensive**: Train, test, and inference modes  
-✅ **Production-ready**: Best practices in code structure  
-✅ **GPU accelerated**: Automatic GPU detection and usage  
-✅ **Visualization**: Training curves and detection visualizations  
-✅ **Checkpointing**: Automatic model saving and resuming  
-✅ **Evaluation**: mAP, Precision, Recall metrics  
+**Easy to use**: Simple command-line interface  
+**Flexible**: Easily adjustable hyperparameters  
+**Comprehensive**: Train, test, and inference modes  
+**Production-ready**: Best practices in code structure  
+**GPU accelerated**: Automatic GPU detection and usage  
+**Visualization**: Training curves and detection visualizations  
+**Checkpointing**: Automatic model saving and resuming  
+**Evaluation**: mAP, Precision, Recall metrics  
 
 ## Performance Monitoring
 
