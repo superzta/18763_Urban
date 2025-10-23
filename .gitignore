@@ -70,3 +70,5 @@ temp/
 
 # Virtual environment
 rcnn_env/
+
+test_img/

@@ -1,281 +1,194 @@
 """
 Inference Example Script
 =========================
-This script demonstrates how to run inference programmatically
-and process results for downstream tasks.
+Simple script to run inference on your own images or test images.
+
+Usage:
+    python inference_example.py
 """
 
 import os
 from pathlib import Path
-import torch
-from PIL import Image
-from rcnn import Config, get_model, inference
-from torchvision.transforms import functional as F
-import json
+from datetime import datetime
+from rcnn import Config, inference
 
 
-def batch_inference_with_results(config, checkpoint_path, image_dir, output_json=None):
-    """
-    Run inference on a directory of images and save structured results.
-    
-    Args:
-        config: Configuration object
-        checkpoint_path: Path to model checkpoint
-        image_dir: Directory containing images
-        output_json: Optional path to save results as JSON
-    """
-    print("=" * 80)
-    print("Batch Inference with Structured Results")
-    print("=" * 80)
-    
-    # Load class names
-    import yaml
-    with open(config.data_yaml, 'r') as f:
-        data_config = yaml.safe_load(f)
-    class_names = ['background'] + data_config['names']
-    
-    # Load model
-    print(f"Loading model from {checkpoint_path}...")
-    model = get_model(config.num_classes, pretrained=False)
-    checkpoint = torch.load(checkpoint_path, map_location=config.device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.to(config.device)
-    model.eval()
-    
-    # Get all images
-    image_dir = Path(image_dir)
-    image_files = sorted(list(image_dir.glob('*.jpg')) + 
-                        list(image_dir.glob('*.png')) + 
-                        list(image_dir.glob('*.jpeg')))
-    
-    print(f"Found {len(image_files)} images\n")
-    
-    all_results = []
-    
-    # Process each image
-    for img_path in image_files:
-        print(f"Processing: {img_path.name}")
-        
-        # Load image
-        image = Image.open(img_path).convert('RGB')
-        image_tensor = F.to_tensor(image).unsqueeze(0).to(config.device)
-        
-        # Run inference
-        with torch.no_grad():
-            predictions = model(image_tensor)[0]
-        
-        # Filter by confidence
-        mask = predictions['scores'] > config.conf_threshold
-        boxes = predictions['boxes'][mask].cpu().numpy()
-        labels = predictions['labels'][mask].cpu().numpy()
-        scores = predictions['scores'][mask].cpu().numpy()
-        
-        # Structure results
-        detections = []
-        for box, label, score in zip(boxes, labels, scores):
-            detection = {
-                'class_id': int(label),
-                'class_name': class_names[label],
-                'confidence': float(score),
-                'bbox': {
-                    'x_min': float(box[0]),
-                    'y_min': float(box[1]),
-                    'x_max': float(box[2]),
-                    'y_max': float(box[3])
-                }
-            }
-            detections.append(detection)
-        
-        image_result = {
-            'image_path': str(img_path),
-            'image_name': img_path.name,
-            'num_detections': len(detections),
-            'detections': detections
-        }
-        
-        all_results.append(image_result)
-        
-        print(f"  Detected {len(detections)} objects")
-        for det in detections:
-            print(f"    - {det['class_name']}: {det['confidence']:.3f}")
-        print()
-    
-    # Save results
-    if output_json:
-        with open(output_json, 'w') as f:
-            json.dump(all_results, f, indent=2)
-        print(f"Results saved to {output_json}")
-    
-    # Summary statistics
-    total_detections = sum(r['num_detections'] for r in all_results)
-    class_counts = {}
-    for result in all_results:
-        for det in result['detections']:
-            class_name = det['class_name']
-            class_counts[class_name] = class_counts.get(class_name, 0) + 1
-    
+def inference_on_custom_image(config, checkpoint_path):
+    """Run inference on user-provided image."""
     print("\n" + "=" * 80)
-    print("Summary Statistics")
-    print("=" * 80)
-    print(f"Total images processed: {len(all_results)}")
-    print(f"Total detections: {total_detections}")
-    print(f"Average detections per image: {total_detections / len(all_results):.2f}")
-    print("\nDetections by class:")
-    for class_name, count in sorted(class_counts.items()):
-        print(f"  {class_name:20s}: {count}")
+    print("Custom Image Inference")
     print("=" * 80)
     
-    return all_results
-
-
-def single_image_inference_detailed(config, checkpoint_path, image_path):
-    """
-    Run inference on a single image with detailed output.
+    # Get image path from user
+    image_path = input("\nEnter image path: ").strip()
     
-    Args:
-        config: Configuration object
-        checkpoint_path: Path to model checkpoint
-        image_path: Path to image
-    """
-    print("=" * 80)
-    print("Single Image Inference")
-    print("=" * 80)
+    if not os.path.exists(image_path):
+        print(f"Error: Image not found at {image_path}")
+        return
     
-    # Load class names
-    import yaml
-    with open(config.data_yaml, 'r') as f:
-        data_config = yaml.safe_load(f)
-    class_names = ['background'] + data_config['names']
-    
-    # Load model
-    print(f"Loading model from {checkpoint_path}...")
-    model = get_model(config.num_classes, pretrained=False)
-    checkpoint = torch.load(checkpoint_path, map_location=config.device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.to(config.device)
-    model.eval()
-    
-    # Load image
-    print(f"Loading image: {image_path}")
-    image = Image.open(image_path).convert('RGB')
-    image_width, image_height = image.size
-    print(f"  Image size: {image_width} x {image_height}")
-    
-    image_tensor = F.to_tensor(image).unsqueeze(0).to(config.device)
+    # Create output filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    image_name = Path(image_path).stem
+    save_path = os.path.join(config.output_dir, f'{image_name}_inference_{timestamp}.jpg')
     
     # Run inference
-    print("Running inference...")
-    with torch.no_grad():
-        predictions = model(image_tensor)[0]
+    print(f"\nProcessing: {Path(image_path).name}")
+    print(f"Confidence threshold: {config.conf_threshold}")
     
-    # All predictions (before filtering)
-    print(f"\nTotal predictions: {len(predictions['boxes'])}")
+    boxes, labels, scores = inference(config, checkpoint_path, image_path, save_path)
     
-    # Filter by confidence
-    mask = predictions['scores'] > config.conf_threshold
-    boxes = predictions['boxes'][mask].cpu().numpy()
-    labels = predictions['labels'][mask].cpu().numpy()
-    scores = predictions['scores'][mask].cpu().numpy()
+    # Display results
+    print(f"\n✓ Detected {len(boxes)} objects:")
+    for i, (label, score) in enumerate(zip(labels, scores), 1):
+        print(f"  [{i}] Confidence: {score:.3f}")
     
-    print(f"Predictions above {config.conf_threshold} confidence: {len(boxes)}")
-    print("\nDetailed results:")
-    print("-" * 80)
-    
-    for i, (box, label, score) in enumerate(zip(boxes, labels, scores)):
-        class_name = class_names[label]
-        box_width = box[2] - box[0]
-        box_height = box[3] - box[1]
-        box_area = box_width * box_height
-        
-        print(f"\nDetection {i+1}:")
-        print(f"  Class: {class_name} (ID: {label})")
-        print(f"  Confidence: {score:.4f} ({score*100:.2f}%)")
-        print(f"  Bounding Box:")
-        print(f"    Top-left: ({box[0]:.1f}, {box[1]:.1f})")
-        print(f"    Bottom-right: ({box[2]:.1f}, {box[3]:.1f})")
-        print(f"    Width: {box_width:.1f} px")
-        print(f"    Height: {box_height:.1f} px")
-        print(f"    Area: {box_area:.1f} px²")
-        print(f"    % of image: {(box_area / (image_width * image_height)) * 100:.2f}%")
-    
+    print(f"\n✓ Output saved to: {save_path}")
+    print("  (Image includes bounding boxes and labels)")
+
+
+def inference_on_test_images(config, checkpoint_path):
+    """Run inference on random test images from trained classes."""
     print("\n" + "=" * 80)
+    print("Test Images Inference")
+    print("=" * 80)
     
-    return boxes, labels, scores
+    # Ask how many images per class
+    num_input = input("\nNumber of random images per class to test (default 3): ").strip()
+    num_per_class = int(num_input) if num_input else 3
+    
+    all_test_images = []
+    
+    # Collect test images from each trained class
+    for class_id in config.urban_issue_classes:
+        folder_name = config.URBAN_ISSUE_DATASETS[class_id][0]
+        class_name = config.URBAN_ISSUE_DATASETS[class_id][1]
+        test_dir = Path(f"data/{folder_name}/{folder_name}/test/images")
+        
+        if test_dir.exists():
+            images = list(test_dir.glob('*.jpg')) + list(test_dir.glob('*.png'))
+            if images:
+                # Select random images
+                import random
+                selected = random.sample(images, min(num_per_class, len(images)))
+                all_test_images.extend([(img, class_id, class_name) for img in selected])
+                print(f"  Class {class_id} ({class_name}): {len(selected)} images")
+    
+    if not all_test_images:
+        print("No test images found for the selected classes.")
+        return
+    
+    print(f"\nTotal: {len(all_test_images)} images")
+    print(f"Confidence threshold: {config.conf_threshold}")
+    
+    input("\nPress Enter to start inference...")
+    
+    # Process each image
+    total_detections = 0
+    
+    for i, (img_path, class_id, class_name) in enumerate(all_test_images, 1):
+        # Create output filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = os.path.join(config.output_dir, f'test_class{class_id}_{i}_{timestamp}.jpg')
+        
+        # Run inference
+        print(f"\n[{i}/{len(all_test_images)}] {img_path.name}")
+        print(f"  Ground truth class: {class_name}")
+        
+        boxes, labels, scores = inference(config, checkpoint_path, str(img_path), save_path)
+        
+        print(f"  ✓ Detected {len(boxes)} objects")
+        for j, (label, score) in enumerate(zip(labels, scores), 1):
+            print(f"    [{j}] Confidence: {score:.3f}")
+        print(f"  ✓ Saved to: {save_path}")
+        
+        total_detections += len(boxes)
+    
+    # Summary
+    print("\n" + "=" * 80)
+    print(f"✓ Inference completed!")
+    print(f"  Total images: {len(all_test_images)}")
+    print(f"  Total detections: {total_detections}")
+    print(f"  Average: {total_detections / len(all_test_images):.2f} detections/image")
+    print(f"  Outputs: {config.output_dir}/")
 
 
 def main():
-    """Example usage."""
-    # Create configuration
-    config = Config()
+    """Main inference script."""
+    print("=" * 80)
+    print("RUIDR - Inference Tool")
+    print("=" * 80)
     
-    # Set checkpoint path
-    checkpoint_path = "checkpoints/best_model.pth"
+    # Step 1: Configure model
+    print("\nStep 1: Model Configuration")
+    print("-" * 80)
     
-    # Check if checkpoint exists
+    print("\nAvailable urban issue classes (0-9):")
+    print("  0: Damaged Road issues")
+    print("  1: Pothole Issues")
+    print("  2: Illegal Parking Issues")
+    print("  3: Broken Road Sign Issues (DEFAULT)")
+    print("  4: Fallen trees")
+    print("  5: Littering/Garbage on Public Places")
+    print("  6: Vandalism Issues")
+    print("  7: Dead Animal Pollution")
+    print("  8: Damaged concrete structures")
+    print("  9: Damaged Electric wires and poles")
+    
+    user_input = input("\nEnter class IDs your model was trained on (e.g., '3' or '0,1,3'): ").strip()
+    
+    if user_input:
+        try:
+            urban_classes = [int(x.strip()) for x in user_input.split(',')]
+        except:
+            print("Invalid input, using default [3]")
+            urban_classes = [3]
+    else:
+        urban_classes = [3]
+    
+    print(f"Selected classes: {urban_classes}")
+    
+    # Create config
+    config = Config(urban_issue_classes=urban_classes)
+    
+    # Confidence threshold
+    conf_input = input(f"Confidence threshold (0-1, default {config.conf_threshold}): ").strip()
+    if conf_input:
+        try:
+            config.conf_threshold = float(conf_input)
+        except:
+            print(f"Invalid input, using default {config.conf_threshold}")
+    
+    # Checkpoint path
+    checkpoint_input = input("Checkpoint path (default: checkpoints/best_model.pth): ").strip()
+    checkpoint_path = checkpoint_input if checkpoint_input else "checkpoints/best_model.pth"
+    
     if not os.path.exists(checkpoint_path):
-        print(f"Error: Checkpoint not found at {checkpoint_path}")
+        print(f"\nError: Checkpoint not found at {checkpoint_path}")
         print("Please train the model first or specify a valid checkpoint path.")
         return
     
-    # ========================================================================
-    # EXAMPLE 1: Single image inference with detailed output
-    # ========================================================================
-    print("\n\nEXAMPLE 1: Single Image Inference\n")
+    print(f"\n✓ Configuration complete")
+    print(f"  Classes: {urban_classes}")
+    print(f"  Confidence: {config.conf_threshold}")
+    print(f"  Checkpoint: {checkpoint_path}")
     
-    test_image = "data/DamagedRoadSigns/DamagedRoadSigns/test/images"
-    if os.path.exists(test_image):
-        # Get first image in test directory
-        image_files = list(Path(test_image).glob('*.jpg'))
-        if image_files:
-            single_image_inference_detailed(config, checkpoint_path, str(image_files[0]))
+    # Step 2: Select inference mode
+    print("\n\nStep 2: Select Inference Mode")
+    print("-" * 80)
+    print("  1. Inference on YOUR OWN image (MAIN FEATURE)")
+    print("  2. Test on random images from dataset")
     
-    # ========================================================================
-    # EXAMPLE 2: Batch inference with structured results
-    # ========================================================================
-    print("\n\nEXAMPLE 2: Batch Inference\n")
+    choice = input("\nChoose mode (1/2, default 1): ").strip() or "1"
     
-    test_dir = "data/DamagedRoadSigns/DamagedRoadSigns/test/images"
-    if os.path.exists(test_dir):
-        results = batch_inference_with_results(
-            config, 
-            checkpoint_path, 
-            test_dir,
-            output_json="results/inference_results.json"
-        )
+    if choice == "2":
+        inference_on_test_images(config, checkpoint_path)
+    else:
+        inference_on_custom_image(config, checkpoint_path)
     
-    # ========================================================================
-    # EXAMPLE 3: Filter results by confidence threshold
-    # ========================================================================
-    print("\n\nEXAMPLE 3: Filtering by Confidence\n")
-    
-    # Try different confidence thresholds
-    for threshold in [0.3, 0.5, 0.7, 0.9]:
-        config.conf_threshold = threshold
-        
-        if os.path.exists(test_dir):
-            image_files = list(Path(test_dir).glob('*.jpg'))[:5]  # First 5 images
-            
-            total_detections = 0
-            for img_path in image_files:
-                image = Image.open(img_path).convert('RGB')
-                image_tensor = F.to_tensor(image).unsqueeze(0).to(config.device)
-                
-                model = get_model(config.num_classes, pretrained=False)
-                checkpoint = torch.load(checkpoint_path, map_location=config.device)
-                model.load_state_dict(checkpoint['model_state_dict'])
-                model.to(config.device)
-                model.eval()
-                
-                with torch.no_grad():
-                    predictions = model(image_tensor)[0]
-                
-                mask = predictions['scores'] > threshold
-                total_detections += mask.sum().item()
-            
-            avg_detections = total_detections / len(image_files)
-            print(f"Threshold {threshold:.1f}: {avg_detections:.2f} detections/image")
+    print("\n" + "=" * 80)
+    print("Done! Check the output images in: " + config.output_dir)
+    print("=" * 80)
 
 
 if __name__ == '__main__':
     main()
-

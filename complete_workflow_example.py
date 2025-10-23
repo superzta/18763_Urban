@@ -40,14 +40,14 @@ def check_prerequisites():
             packages_ok = False
     
     if not packages_ok:
-        print("\n❌ Some packages are missing!")
+        print("\n Some packages are missing!")
         print("Please run: pip install -r requirements.txt")
         return False
     
     # Check dataset
     dataset_path = "data/DamagedRoadSigns/DamagedRoadSigns"
     if not os.path.exists(dataset_path):
-        print(f"\n❌ Dataset not found at: {dataset_path}")
+        print(f"\n Dataset not found at: {dataset_path}")
         print("Please download and extract the dataset.")
         return False
     
@@ -60,7 +60,7 @@ def check_prerequisites():
     else:
         print("⚠ CUDA not available - Will use CPU (slower)")
     
-    print("\n✅ All prerequisites met!")
+    print("\n All prerequisites met!")
     return True
 
 
@@ -68,8 +68,40 @@ def demo_training():
     """Demonstrate training with minimal epochs."""
     print_section("STEP 2: Training Demo (Quick Training)")
     
-    print("This will train a model for 5 epochs as a demo.")
-    print("For real training, use 50-100 epochs.\n")
+    print("Available urban issue classes (0-9):")
+    print("  0: Damaged Road issues")
+    print("  1: Pothole Issues")
+    print("  2: Illegal Parking Issues")
+    print("  3: Broken Road Sign Issues (DEFAULT)")
+    print("  4: Fallen trees")
+    print("  5: Littering/Garbage on Public Places")
+    print("  6: Vandalism Issues")
+    print("  7: Dead Animal Pollution")
+    print("  8: Damaged concrete structures")
+    print("  9: Damaged Electric wires and poles")
+    print()
+    
+    print("Enter class IDs to train on (comma-separated, e.g., '3' or '0,1,3'):")
+    print("Press Enter for default (class 3 - Broken Road Signs)")
+    user_input = input("Classes: ").strip()
+    
+    if user_input:
+        try:
+            urban_classes = [int(x.strip()) for x in user_input.split(',')]
+        except:
+            print("Invalid input, using default [3]")
+            urban_classes = [3]
+    else:
+        urban_classes = [3]
+    
+    print(f"\nSelected classes: {urban_classes}")
+    
+    # Ask for number of epochs
+    epochs_input = input("Number of epochs (default 5 for demo): ").strip()
+    num_epochs = int(epochs_input) if epochs_input else 5
+    
+    print(f"\nThis will train a model for {num_epochs} epochs.")
+    print("For production use, train for 50-100 epochs.\n")
     
     input("Press Enter to start training, or Ctrl+C to skip...")
     
@@ -77,13 +109,14 @@ def demo_training():
     from rcnn import Config, train
     
     # Create config for demo
-    config = Config()
-    config.num_epochs = 5  # Quick demo
+    config = Config(urban_issue_classes=urban_classes)
+    config.num_epochs = num_epochs
     config.batch_size = 2  # Small batch for compatibility
     config.save_freq = 2   # Save more frequently
     config.print_freq = 10  # Print more frequently
     
     print("\nStarting training...")
+    print(f"Classes: {config.urban_issue_classes}")
     print(f"Epochs: {config.num_epochs}")
     print(f"Batch size: {config.batch_size}")
     print(f"Device: {config.device}")
@@ -91,92 +124,140 @@ def demo_training():
     
     try:
         model = train(config)
-        print("\n✅ Training completed successfully!")
-        return True
+        print("\n Training completed successfully!")
+        return config, True
     except Exception as e:
-        print(f"\n❌ Training failed: {str(e)}")
-        return False
+        print(f"\n Training failed: {str(e)}")
+        return None, False
 
 
-def demo_evaluation():
+def demo_evaluation(config):
     """Demonstrate model evaluation."""
     print_section("STEP 3: Model Evaluation")
     
     checkpoint_path = "checkpoints/best_model.pth"
     
     if not os.path.exists(checkpoint_path):
-        print(f"❌ Checkpoint not found: {checkpoint_path}")
+        print(f" Checkpoint not found: {checkpoint_path}")
         print("Please train the model first.")
         return False
     
-    print(f"Evaluating model: {checkpoint_path}\n")
+    print(f"Evaluating model: {checkpoint_path}")
+    print(f"Testing on classes: {config.urban_issue_classes}\n")
     
     input("Press Enter to start evaluation, or Ctrl+C to skip...")
     
-    from rcnn import Config, test
-    
-    config = Config()
+    from rcnn import test
     
     try:
         results = test(config, checkpoint_path)
-        print("\n✅ Evaluation completed successfully!")
+        print("\n Evaluation completed successfully!")
+        print(f"   mAP@0.5: {results['mAP@0.5']:.4f}")
+        print(f"   Precision: {results['precision']:.4f}")
+        print(f"   Recall: {results['recall']:.4f}")
         return True
     except Exception as e:
-        print(f"\n❌ Evaluation failed: {str(e)}")
+        print(f"\n Evaluation failed: {str(e)}")
         return False
 
 
-def demo_inference():
-    """Demonstrate inference on test images."""
+def demo_inference(config):
+    """Demonstrate inference on test images with visualization."""
     print_section("STEP 4: Inference Demo")
     
     checkpoint_path = "checkpoints/best_model.pth"
     
     if not os.path.exists(checkpoint_path):
-        print(f"❌ Checkpoint not found: {checkpoint_path}")
+        print(f" Checkpoint not found: {checkpoint_path}")
         print("Please train the model first.")
         return False
     
-    # Find a test image
-    test_image_dir = "data/DamagedRoadSigns/DamagedRoadSigns/test/images"
+    # Ask user for image path or use test images
+    print("Options:")
+    print("  1. Use test images from dataset")
+    print("  2. Specify custom image path")
+    print("  3. Specify custom directory path")
+    choice = input("Choose option (1/2/3, default 1): ").strip() or "1"
     
-    if not os.path.exists(test_image_dir):
-        print(f"❌ Test images not found: {test_image_dir}")
-        return False
+    if choice == "2":
+        image_path = input("Enter image path: ").strip()
+        if not os.path.exists(image_path):
+            print(f" Image not found: {image_path}")
+            return False
+        image_files = [Path(image_path)]
+    elif choice == "3":
+        dir_path = input("Enter directory path: ").strip()
+        if not os.path.exists(dir_path):
+            print(f" Directory not found: {dir_path}")
+            return False
+        image_files = list(Path(dir_path).glob('*.jpg')) + list(Path(dir_path).glob('*.png'))
+        if not image_files:
+            print(" No images found in directory")
+            return False
+        # Limit to first 5 images for demo
+        image_files = image_files[:5]
+    else:
+        # Use test images from first selected class
+        folder_name = config.URBAN_ISSUE_DATASETS[config.urban_issue_classes[0]][0]
+        test_image_dir = f"data/{folder_name}/{folder_name}/test/images"
+        
+        if not os.path.exists(test_image_dir):
+            print(f" Test images not found: {test_image_dir}")
+            return False
+        
+        # Get first 5 test images
+        image_files = list(Path(test_image_dir).glob('*.jpg'))[:5]
+        if not image_files:
+            image_files = list(Path(test_image_dir).glob('*.png'))[:5]
+        
+        if not image_files:
+            print(" No test images found.")
+            return False
     
-    # Get first test image
-    image_files = list(Path(test_image_dir).glob('*.jpg'))
-    if not image_files:
-        image_files = list(Path(test_image_dir).glob('*.png'))
+    # Ask for confidence threshold
+    conf_input = input(f"Confidence threshold (0-1, default {config.conf_threshold}): ").strip()
+    if conf_input:
+        try:
+            config.conf_threshold = float(conf_input)
+        except:
+            print(f"Invalid input, using default {config.conf_threshold}")
     
-    if not image_files:
-        print("❌ No test images found.")
-        return False
-    
-    test_image = str(image_files[0])
-    print(f"Running inference on: {Path(test_image).name}\n")
+    print(f"\nRunning inference on {len(image_files)} image(s)")
+    print(f"Confidence threshold: {config.conf_threshold}\n")
     
     input("Press Enter to run inference, or Ctrl+C to skip...")
     
-    from rcnn import Config, inference
+    from rcnn import inference
     from datetime import datetime
     
-    config = Config()
-    
-    # Create output path
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_path = os.path.join(config.output_dir, f'demo_inference_{timestamp}.jpg')
+    total_detections = 0
     
     try:
-        boxes, labels, scores = inference(config, checkpoint_path, test_image, save_path)
+        for i, img_path in enumerate(image_files, 1):
+            print(f"\nProcessing image {i}/{len(image_files)}: {img_path.name}")
+            
+            # Create output path
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_path = os.path.join(config.output_dir, f'demo_inference_{i}_{timestamp}.jpg')
+            
+            boxes, labels, scores = inference(config, checkpoint_path, str(img_path), save_path)
+            
+            print(f"✓ Detected {len(boxes)} objects")
+            for j, (box, label, score) in enumerate(zip(boxes, labels, scores), 1):
+                print(f"  [{j}] Confidence: {score:.3f}")
+            print(f"✓ Saved to: {save_path}")
+            
+            total_detections += len(boxes)
         
-        print(f"\n✅ Inference completed!")
-        print(f"   Detected {len(boxes)} objects")
-        print(f"   Output saved to: {save_path}")
+        print(f"\n Inference completed!")
+        print(f"   Processed: {len(image_files)} images")
+        print(f"   Total detections: {total_detections}")
+        print(f"   Average: {total_detections / len(image_files):.2f} detections/image")
+        print(f"   Outputs saved to: {config.output_dir}/")
         
         return True
     except Exception as e:
-        print(f"\n❌ Inference failed: {str(e)}")
+        print(f"\n Inference failed: {str(e)}")
         return False
 
 
@@ -189,7 +270,7 @@ def show_results():
     # Check checkpoints
     if os.path.exists("checkpoints"):
         checkpoints = list(Path("checkpoints").glob("*.pth"))
-        print(f"📁 Checkpoints ({len(checkpoints)} files):")
+        print(f" Checkpoints ({len(checkpoints)} files):")
         for cp in sorted(checkpoints)[:5]:  # Show first 5
             size_mb = os.path.getsize(cp) / (1024 * 1024)
             print(f"   - {cp.name} ({size_mb:.1f} MB)")
@@ -200,7 +281,7 @@ def show_results():
     # Check results
     if os.path.exists("results"):
         results = list(Path("results").glob("*"))
-        print(f"📊 Results ({len(results)} files):")
+        print(f" Results ({len(results)} files):")
         for result in sorted(results):
             print(f"   - {result.name}")
         print()
@@ -208,7 +289,7 @@ def show_results():
     # Check outputs
     if os.path.exists("outputs"):
         outputs = list(Path("outputs").glob("*.jpg"))
-        print(f"🖼️  Inference Outputs ({len(outputs)} files):")
+        print(f"  Inference Outputs ({len(outputs)} files):")
         for output in sorted(outputs)[:5]:  # Show first 5
             print(f"   - {output.name}")
         if len(outputs) > 5:
@@ -263,7 +344,7 @@ def main():
     try:
         # Step 1: Prerequisites
         if not check_prerequisites():
-            print("\n❌ Prerequisites check failed. Please fix issues and try again.")
+            print("\n Prerequisites check failed. Please fix issues and try again.")
             return
         
         # Ask if user wants to run full demo
@@ -276,7 +357,8 @@ def main():
             return
         
         # Step 2: Training
-        if not demo_training():
+        config, success = demo_training()
+        if not success:
             print("\n⚠ Training failed, skipping remaining steps.")
             show_usage_examples()
             return
@@ -285,19 +367,19 @@ def main():
         print("\n" + "-" * 80)
         response = input("\nRun evaluation? (y/n): ").lower()
         if response == 'y':
-            demo_evaluation()
+            demo_evaluation(config)
         
         # Step 4: Inference
         print("\n" + "-" * 80)
         response = input("\nRun inference demo? (y/n): ").lower()
         if response == 'y':
-            demo_inference()
+            demo_inference(config)
         
         # Step 5: Show results
         show_results()
         
         print_section("Demo Completed!")
-        print("✅ Workflow demo completed successfully!")
+        print(" Workflow demo completed successfully!")
         print("\nYou can now:")
         print("  - Train with more epochs for better results")
         print("  - Experiment with different hyperparameters")
@@ -309,7 +391,7 @@ def main():
         print("\nYou can run individual steps using rcnn.py:")
         show_usage_examples()
     except Exception as e:
-        print(f"\n\n❌ Demo failed with error: {str(e)}")
+        print(f"\n\n Demo failed with error: {str(e)}")
         print("\nPlease check the error message and try again.")
 
 
