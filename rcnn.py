@@ -243,8 +243,21 @@ class MultiClassUrbanDataset(Dataset):
                     x_max = x_center + width / 2
                     y_max = y_center + height / 2
                     
-                    boxes.append([x_min, y_min, x_max, y_max])
-                    labels.append(model_class_idx)
+                    # Validate bounding box - must have positive width and height
+                    # Skip invalid boxes (zero or negative dimensions)
+                    if x_max <= x_min or y_max <= y_min:
+                        continue  # Skip this invalid box
+                    
+                    # Also ensure box is within image boundaries
+                    x_min = max(0, min(x_min, img_width))
+                    y_min = max(0, min(y_min, img_height))
+                    x_max = max(0, min(x_max, img_width))
+                    y_max = max(0, min(y_max, img_height))
+                    
+                    # Final check after clipping
+                    if x_max > x_min and y_max > y_min:
+                        boxes.append([x_min, y_min, x_max, y_max])
+                        labels.append(model_class_idx)
         
         # Convert to tensors
         if len(boxes) == 0:
@@ -327,46 +340,88 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
     running_loss_objectness = 0.0
     running_loss_rpn_box_reg = 0.0
     
+    skipped_batches = 0
+    successful_batches = 0
+    
     pbar = tqdm(data_loader, desc=f"Epoch {epoch}")
     
     for i, (images, targets) in enumerate(pbar):
-        images = list(image.to(device) for image in images)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        try:
+            images = list(image.to(device) for image in images)
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+            
+            # Filter out targets with no valid boxes
+            valid_indices = [idx for idx, t in enumerate(targets) if len(t['boxes']) > 0]
+            
+            if len(valid_indices) == 0:
+                skipped_batches += 1
+                continue  # Skip this batch if no valid targets
+            
+            # Keep only valid samples
+            images = [images[idx] for idx in valid_indices]
+            targets = [targets[idx] for idx in valid_indices]
+            
+            # Forward pass
+            loss_dict = model(images, targets)
+            losses = sum(loss for loss in loss_dict.values())
+            
+            # Backward pass
+            optimizer.zero_grad()
+            losses.backward()
+            optimizer.step()
+            
+            # Statistics
+            running_loss += losses.item()
+            running_loss_classifier += loss_dict['loss_classifier'].item()
+            running_loss_box_reg += loss_dict['loss_box_reg'].item()
+            running_loss_objectness += loss_dict['loss_objectness'].item()
+            running_loss_rpn_box_reg += loss_dict['loss_rpn_box_reg'].item()
+            
+            successful_batches += 1
+            
+            # Update progress bar
+            if (successful_batches + 1) % print_freq == 0:
+                avg_loss = running_loss / successful_batches if successful_batches > 0 else 0
+                pbar.set_postfix({
+                    'loss': f'{avg_loss:.4f}',
+                    'cls': f'{running_loss_classifier / successful_batches:.4f}' if successful_batches > 0 else '0.0000',
+                    'box': f'{running_loss_box_reg / successful_batches:.4f}' if successful_batches > 0 else '0.0000',
+                    'skipped': skipped_batches
+                })
         
-        # Forward pass
-        loss_dict = model(images, targets)
-        losses = sum(loss for loss in loss_dict.values())
-        
-        # Backward pass
-        optimizer.zero_grad()
-        losses.backward()
-        optimizer.step()
-        
-        # Statistics
-        running_loss += losses.item()
-        running_loss_classifier += loss_dict['loss_classifier'].item()
-        running_loss_box_reg += loss_dict['loss_box_reg'].item()
-        running_loss_objectness += loss_dict['loss_objectness'].item()
-        running_loss_rpn_box_reg += loss_dict['loss_rpn_box_reg'].item()
-        
-        # Update progress bar
-        if (i + 1) % print_freq == 0:
-            avg_loss = running_loss / (i + 1)
-            pbar.set_postfix({
-                'loss': f'{avg_loss:.4f}',
-                'cls': f'{running_loss_classifier / (i + 1):.4f}',
-                'box': f'{running_loss_box_reg / (i + 1):.4f}'
-            })
+        except Exception as e:
+            # Log error and continue training
+            skipped_batches += 1
+            if skipped_batches <= 5:  # Only print first 5 errors to avoid spam
+                print(f"\nWarning: Skipped batch {i} due to error: {str(e)[:100]}")
+            continue
     
     # Calculate epoch statistics
-    epoch_loss = running_loss / len(data_loader)
-    epoch_stats = {
-        'total_loss': epoch_loss,
-        'loss_classifier': running_loss_classifier / len(data_loader),
-        'loss_box_reg': running_loss_box_reg / len(data_loader),
-        'loss_objectness': running_loss_objectness / len(data_loader),
-        'loss_rpn_box_reg': running_loss_rpn_box_reg / len(data_loader)
-    }
+    if successful_batches > 0:
+        epoch_loss = running_loss / successful_batches
+        epoch_stats = {
+            'total_loss': epoch_loss,
+            'loss_classifier': running_loss_classifier / successful_batches,
+            'loss_box_reg': running_loss_box_reg / successful_batches,
+            'loss_objectness': running_loss_objectness / successful_batches,
+            'loss_rpn_box_reg': running_loss_rpn_box_reg / successful_batches,
+            'skipped_batches': skipped_batches,
+            'successful_batches': successful_batches
+        }
+    else:
+        # No successful batches - return zero losses
+        epoch_stats = {
+            'total_loss': 0.0,
+            'loss_classifier': 0.0,
+            'loss_box_reg': 0.0,
+            'loss_objectness': 0.0,
+            'loss_rpn_box_reg': 0.0,
+            'skipped_batches': skipped_batches,
+            'successful_batches': 0
+        }
+    
+    if skipped_batches > 0:
+        print(f"\nEpoch summary: {successful_batches} successful batches, {skipped_batches} skipped batches")
     
     return epoch_stats
 
@@ -460,6 +515,9 @@ def train(config: Config):
         print(f"  Box Reg Loss: {epoch_stats['loss_box_reg']:.4f}")
         print(f"  Objectness Loss: {epoch_stats['loss_objectness']:.4f}")
         print(f"  RPN Box Reg Loss: {epoch_stats['loss_rpn_box_reg']:.4f}")
+        if epoch_stats.get('skipped_batches', 0) > 0:
+            print(f"  ⚠ Skipped batches: {epoch_stats['skipped_batches']} (invalid data)")
+            print(f"  ✓ Successful batches: {epoch_stats['successful_batches']}")
         
         epoch_stats['epoch'] = epoch
         epoch_stats['lr'] = current_lr
