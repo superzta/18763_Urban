@@ -218,13 +218,32 @@ python train_examples.py
 # 6. Custom selection
 ```
 
+#### Option 5: Testing Examples
+```bash
+python test_examples.py
+# Select from predefined testing scenarios:
+# 1. Single class (Broken Road Signs)
+# 2. Road-related issues
+# 3. Infrastructure issues
+# 4. Environmental issues
+# 5. ALL classes
+# 6. Custom selection
+```
+
 ### Testing
 
 Evaluate model performance on test set:
 
 ```bash
+# Test on single class (default: class 3)
 python rcnn.py --mode test --checkpoint checkpoints/best_model.pth
+
+# Test on specific classes (must match training classes!)
+python rcnn.py --mode test --classes 3 --checkpoint checkpoints/best_model.pth
+python rcnn.py --mode test --classes 0,1,3 --checkpoint checkpoints/best_model.pth
 ```
+
+**Important:** The `--classes` should match the classes used during training!
 
 **Output:**
 - mAP@0.5, Precision, Recall
@@ -235,7 +254,15 @@ python rcnn.py --mode test --checkpoint checkpoints/best_model.pth
 
 #### Single Image
 ```bash
+# Default (class 3)
 python rcnn.py --mode inference \
+    --checkpoint checkpoints/best_model.pth \
+    --image path/to/image.jpg \
+    --conf-threshold 0.5
+
+# Specify classes
+python rcnn.py --mode inference \
+    --classes 0,1,3 \
     --checkpoint checkpoints/best_model.pth \
     --image path/to/image.jpg \
     --conf-threshold 0.5
@@ -244,6 +271,7 @@ python rcnn.py --mode inference \
 #### Batch Processing
 ```bash
 python rcnn.py --mode inference \
+    --classes 3 \
     --checkpoint checkpoints/best_model.pth \
     --image-dir path/to/images/ \
     --conf-threshold 0.5
@@ -419,34 +447,47 @@ python train_examples.py
 ### Testing Commands
 
 ```bash
-# Test best model
+# Test best model (default class 3)
 python rcnn.py --mode test --checkpoint checkpoints/best_model.pth
 
+# Test on specific classes
+python rcnn.py --mode test --classes 3 --checkpoint checkpoints/best_model.pth
+python rcnn.py --mode test --classes 0,1,3 --checkpoint checkpoints/best_model.pth
+
 # Test specific checkpoint
-python rcnn.py --mode test --checkpoint checkpoints/fasterrcnn_epoch_50.pth
+python rcnn.py --mode test --classes 3 --checkpoint checkpoints/fasterrcnn_epoch_50.pth
 ```
 
 ### Inference Commands
 
 ```bash
-# Single image
+# Single image (default class 3)
 python rcnn.py --mode inference \
+    --checkpoint checkpoints/best_model.pth \
+    --image image.jpg
+
+# Single image with specific classes
+python rcnn.py --mode inference \
+    --classes 0,1,3 \
     --checkpoint checkpoints/best_model.pth \
     --image image.jpg
 
 # Batch inference
 python rcnn.py --mode inference \
+    --classes 3 \
     --checkpoint checkpoints/best_model.pth \
     --image-dir images/
 
 # Lower confidence (more detections)
 python rcnn.py --mode inference \
+    --classes 3 \
     --checkpoint checkpoints/best_model.pth \
     --image image.jpg \
     --conf-threshold 0.3
 
 # Higher confidence (fewer, confident detections)
 python rcnn.py --mode inference \
+    --classes 3 \
     --checkpoint checkpoints/best_model.pth \
     --image image.jpg \
     --conf-threshold 0.8
@@ -501,6 +542,7 @@ watch -n 1 nvidia-smi  # Linux/Mac
 ├── rcnn.py                           # Main script (training/testing/inference)
 ├── retrain_and_visualize.py          # Interactive training script
 ├── train_examples.py                 # Predefined training scenarios
+├── test_examples.py                  # Predefined testing scenarios
 ├── complete_workflow_example.py      # Complete demo workflow
 ├── inference_example.py              # Advanced inference examples
 ├── config_example.py                 # Configuration examples
@@ -522,6 +564,9 @@ python rcnn.py --mode train --epochs 10 --batch-size 4
 
 # Test the model
 python rcnn.py --mode test --checkpoint checkpoints/best_model.pth
+
+# Or use test examples script
+python test_examples.py
 
 # Run inference
 python rcnn.py --mode inference \
@@ -774,6 +819,18 @@ python rcnn.py --mode test --checkpoint checkpoints/best_model.pth
 
 # Inference
 python rcnn.py --mode inference --checkpoint checkpoints/best_model.pth --image test.jpg
+```
+
+**Using example scripts:**
+```bash
+# Training examples
+python train_examples.py
+
+# Testing examples
+python test_examples.py
+
+# Inference examples
+python inference_example.py
 ```
 
 **Happy detecting! **

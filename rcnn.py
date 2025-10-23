@@ -1020,17 +1020,21 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Train from scratch
+  # Train on single class (default: class 3)
   python rcnn.py --mode train --epochs 50 --batch-size 4 --lr 0.005
   
-  # Test on test set
-  python rcnn.py --mode test --checkpoint checkpoints/best_model.pth
+  # Train on multiple classes
+  python rcnn.py --mode train --classes 0,1,3 --epochs 50 --batch-size 4
+  
+  # Test on specific classes
+  python rcnn.py --mode test --classes 3 --checkpoint checkpoints/best_model.pth
+  python rcnn.py --mode test --classes 0,1,3 --checkpoint checkpoints/best_model.pth
   
   # Run inference on single image
-  python rcnn.py --mode inference --checkpoint checkpoints/best_model.pth --image path/to/image.jpg
+  python rcnn.py --mode inference --classes 3 --checkpoint checkpoints/best_model.pth --image path/to/image.jpg
   
   # Run inference on directory
-  python rcnn.py --mode inference --checkpoint checkpoints/best_model.pth --image-dir path/to/images/
+  python rcnn.py --mode inference --classes 0,1,3 --checkpoint checkpoints/best_model.pth --image-dir path/to/images/
         """
     )
     
@@ -1044,6 +1048,8 @@ Examples:
                        help='Root directory of dataset')
     parser.add_argument('--data-yaml', type=str, default=None,
                        help='Path to data.yaml file')
+    parser.add_argument('--classes', type=str, default=None,
+                       help='Comma-separated class IDs (0-9) to train/test on, e.g., "3" or "0,1,3" (default: 3)')
     
     # Training hyperparameters
     parser.add_argument('--batch-size', type=int, default=None,
@@ -1071,8 +1077,17 @@ Examples:
     
     args = parser.parse_args()
     
-    # Create config
-    config = Config()
+    # Parse class IDs if provided
+    urban_issue_classes = [3]  # Default
+    if args.classes:
+        try:
+            urban_issue_classes = [int(x.strip()) for x in args.classes.split(',')]
+        except:
+            print(f"Warning: Invalid --classes format '{args.classes}', using default [3]")
+            urban_issue_classes = [3]
+    
+    # Create config with specified classes
+    config = Config(urban_issue_classes=urban_issue_classes)
     config.update_from_args(args)
     
     # Execute based on mode

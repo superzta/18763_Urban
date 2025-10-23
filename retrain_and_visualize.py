@@ -51,10 +51,15 @@ def main():
     
     # Create config with selected classes
     config = Config(urban_issue_classes=urban_classes)
-    config.num_epochs = 1  # Quick training for demo
-    config.batch_size = 4
+    # config.num_epochs = 1  # Quick training for demo
+    # config.batch_size = 4
+    # config.learning_rate = 0.005
+    # config.conf_threshold = 0.3  # Lower threshold to see more detections
+
+    config.num_epochs = 3  # Quick training for demo
+    config.batch_size = 2
     config.learning_rate = 0.005
-    config.conf_threshold = 0.3  # Lower threshold to see more detections
+    config.conf_threshold = 0.4  # Lower threshold to see more detections
     
     print(f"\nConfiguration:")
     print(f"  Device: {config.device}")
