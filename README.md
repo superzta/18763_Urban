@@ -338,7 +338,7 @@ model = train(config)
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 ### Hyperparameters
 
