@@ -97,7 +97,9 @@ class Config:
         
         # Inference settings
         self.conf_threshold = 0.5  # Confidence threshold for detections
+        self.conf_threshold = 0.5  # Confidence threshold for detections
         self.nms_threshold = 0.3   # NMS IoU threshold
+        self.use_proxy_map = False # Use proxy mAP (P+R)/2 instead of exact AP
         
         # Paths
         self.checkpoint_dir = "checkpoints"
@@ -127,6 +129,8 @@ class Config:
             self.checkpoint_dir = args.checkpoint_dir
         if args.output_dir:
             self.output_dir = args.output_dir
+        if args.use_proxy_map:
+            self.use_proxy_map = True
     
     def __str__(self):
         """String representation of configuration."""
@@ -775,10 +779,15 @@ def evaluate(model, data_loader, device, config):
         all_ground_truths.extend(targets)
     
     # Calculate mAP
-    results = calculate_map(all_predictions, all_ground_truths, config.conf_threshold)
+    results = calculate_map(
+        all_predictions, 
+        all_ground_truths, 
+        config.conf_threshold,
+        use_proxy=config.use_proxy_map
+    )
     
     print("\nEvaluation Results:")
-    print(f"  mAP@0.5: {results['mAP@0.5']:.4f}")
+    print(f"  mAP@0.5 ({'Proxy' if results['is_proxy'] else 'Exact'}): {results['mAP@0.5']:.4f}")
     print(f"  Precision: {results['precision']:.4f}")
     print(f"  Recall: {results['recall']:.4f}")
     print(f"  Total Predictions: {results['total_predictions']}")
@@ -800,71 +809,330 @@ def evaluate(model, data_loader, device, config):
     return results
 
 
-def calculate_map(predictions, ground_truths, conf_threshold=0.5, iou_threshold=0.5):
-    """Calculate mean Average Precision."""
-    true_positives = 0
-    false_positives = 0
-    total_ground_truths = 0
+# def calculate_map(predictions, ground_truths, conf_threshold=0.5, iou_threshold=0.5, use_proxy=False):
+#     """
+#     Calculate mean Average Precision (mAP) across all classes.
     
-    for pred, gt in zip(predictions, ground_truths):
-        pred_boxes = pred['boxes']
-        pred_scores = pred['scores']
-        pred_labels = pred['labels']
+#     Args:
+#         predictions: List of prediction dicts
+#         ground_truths: List of ground truth dicts
+#         conf_threshold: Confidence threshold (used only for proxy mAP)
+#         iou_threshold: IoU threshold for matching
+#         use_proxy: If True, use (Precision+Recall)/2 as proxy for AP.
+#                   If False, use exact Area Under Precision-Recall Curve (VOC style).
+#     """
+#     # Find all unique classes in GT and Predictions
+#     all_classes = set()
+#     for gt in ground_truths:
+#         all_classes.update(gt['labels'].tolist())
+#     for pred in predictions:
+#         all_classes.update(pred['labels'].tolist())
+    
+#     if not all_classes:
+#         return {
+#             'mAP@0.5': 0.0,
+#             'precision': 0.0,
+#             'recall': 0.0,
+#             'total_predictions': 0,
+#             'total_ground_truths': 0,
+#             'is_proxy': use_proxy
+#         }
+
+#     # Per-class metrics
+#     aps = []
+#     precisions = []
+#     recalls = []
+#     total_tps = 0
+#     total_fps = 0
+#     total_gts = 0
+    
+#     for class_id in all_classes:
+#         class_id = int(class_id)
         
-        gt_boxes = gt['boxes']
-        gt_labels = gt['labels']
+#         # Collect detections and GTs for this class
+#         class_detections = [] # (score, is_tp)
+#         class_n_gts = 0
         
-        # Filter by confidence
-        mask = pred_scores > conf_threshold
-        pred_boxes = pred_boxes[mask]
-        pred_labels = pred_labels[mask]
-        pred_scores = pred_scores[mask]
+#         class_tps = 0
+#         class_fps = 0
         
-        total_ground_truths += len(gt_boxes)
-        
-        matched_gt = set()
-        
-        # Sort predictions by score (descending)
-        if len(pred_scores) > 0:
-            sorted_indices = torch.argsort(pred_scores, descending=True)
-            pred_boxes = pred_boxes[sorted_indices]
-            pred_labels = pred_labels[sorted_indices]
+#         for pred, gt in zip(predictions, ground_truths):
+#             # Get GT boxes for this class
+#             gt_mask = gt['labels'] == class_id
+#             gt_boxes = gt['boxes'][gt_mask]
+#             class_n_gts += len(gt_boxes)
             
-            for pred_box, pred_label in zip(pred_boxes, pred_labels):
-                best_iou = 0
-                best_gt_idx = -1
+#             # Get Pred boxes for this class
+#             pred_mask = pred['labels'] == class_id
+#             pred_boxes = pred['boxes'][pred_mask]
+#             pred_scores = pred['scores'][pred_mask]
+            
+#             # For Exact AP, we use ALL detections (no threshold or very low threshold)
+#             # For Proxy AP, we use the provided threshold
+#             if use_proxy:
+#                 score_mask = pred_scores > conf_threshold
+#             else:
+#                 score_mask = pred_scores > 0.0 # Use all for PR curve
                 
-                for gt_idx, (gt_box, gt_label) in enumerate(zip(gt_boxes, gt_labels)):
-                    if gt_idx in matched_gt:
-                        continue
+#             pred_boxes = pred_boxes[score_mask]
+#             pred_scores = pred_scores[score_mask]
+            
+#             # Match predictions to GT
+#             matched_gt = set()
+            
+#             # Sort by score descending
+#             if len(pred_scores) > 0:
+#                 sorted_indices = torch.argsort(pred_scores, descending=True)
+#                 pred_boxes = pred_boxes[sorted_indices]
+#                 pred_scores = pred_scores[sorted_indices]
+                
+#                 for box, score in zip(pred_boxes, pred_scores):
+#                     best_iou = 0
+#                     best_gt_idx = -1
                     
-                    if pred_label == gt_label:
-                        iou = compute_iou(pred_box.numpy(), gt_box.numpy())
+#                     for gt_idx, gt_box in enumerate(gt_boxes):
+#                         if gt_idx in matched_gt:
+#                             continue
+                        
+#                         iou = compute_iou(box.numpy(), gt_box.numpy())
+#                         if iou > best_iou:
+#                             best_iou = iou
+#                             best_gt_idx = gt_idx
+                    
+#                     is_tp = False
+#                     if best_iou >= iou_threshold and best_gt_idx != -1:
+#                         matched_gt.add(best_gt_idx)
+#                         is_tp = True
+#                         class_tps += 1
+#                     else:
+#                         class_fps += 1
+                    
+#                     class_detections.append((score.item(), is_tp))
+        
+#         # Calculate AP for this class
+#         if class_n_gts == 0:
+#             ap = 0.0
+#             prec = 0.0
+#             rec = 0.0
+#         else:
+#             if use_proxy:
+#                 # Proxy: (P+R)/2 at specific threshold
+#                 prec = class_tps / (class_tps + class_fps) if (class_tps + class_fps) > 0 else 0
+#                 rec = class_tps / class_n_gts
+#                 ap = (prec + rec) / 2
+#             else:
+#                 # Exact: Area Under PR Curve
+#                 if len(class_detections) == 0:
+#                     ap = 0.0
+#                     prec = 0.0
+#                     rec = 0.0
+#                 else:
+#                     # Sort by score
+#                     class_detections.sort(key=lambda x: x[0], reverse=True)
+                    
+#                     tps = np.array([1 if x[1] else 0 for x in class_detections])
+#                     fps = np.array([1 if not x[1] else 0 for x in class_detections])
+                    
+#                     cum_tps = np.cumsum(tps)
+#                     cum_fps = np.cumsum(fps)
+                    
+#                     prec_curve = cum_tps / (cum_tps + cum_fps)
+#                     rec_curve = cum_tps / class_n_gts
+                    
+#                     # Pad for AUC
+#                     prec_curve = np.concatenate(([0.0], prec_curve, [0.0]))
+#                     rec_curve = np.concatenate(([0.0], rec_curve, [1.0]))
+                    
+#                     # Monotonically decreasing precision
+#                     for i in range(len(prec_curve) - 2, -1, -1):
+#                         prec_curve[i] = max(prec_curve[i], prec_curve[i + 1])
+                    
+#                     # AUC
+#                     indices = np.where(rec_curve[1:] != rec_curve[:-1])[0]
+#                     ap = np.sum((rec_curve[indices + 1] - rec_curve[indices]) * prec_curve[indices + 1])
+                    
+#                     # For reporting, use the values at the end (or max) - simplified for summary
+#                     prec = prec_curve[-2] if len(prec_curve) > 1 else 0 # Approximation for summary
+#                     rec = rec_curve[-2] if len(rec_curve) > 1 else 0
+        
+#         aps.append(ap)
+#         precisions.append(prec)
+#         recalls.append(rec)
+#         total_tps += class_tps
+#         total_fps += class_fps
+#         total_gts += class_n_gts
+
+#     # Mean metrics
+#     mAP = np.mean(aps) if aps else 0.0
+#     mean_prec = np.mean(precisions) if precisions else 0.0
+#     mean_rec = np.mean(recalls) if recalls else 0.0
+    
+#     return {
+#         'mAP@0.5': float(mAP),
+#         'precision': float(mean_prec),
+#         'recall': float(mean_rec),
+#         'total_predictions': total_tps + total_fps,
+#         'total_ground_truths': total_gts,
+#         'is_proxy': use_proxy
+#     }
+
+def calculate_map(predictions, ground_truths, conf_threshold=0.5, iou_threshold=0.5, use_proxy=False):
+    """
+    Calculate mean Average Precision (mAP) across all (non-background) classes.
+
+    Args:
+        predictions: List[dict] with keys 'boxes', 'labels', 'scores' (torch tensors)
+        ground_truths: List[dict] with keys 'boxes', 'labels' (torch tensors)
+        conf_threshold: Confidence threshold (used only for proxy mAP)
+        iou_threshold: IoU threshold for matching
+        use_proxy: If True, use (Precision+Recall)/2 per class at a single threshold.
+                   If False, use exact Area Under Precision-Recall Curve (VOC style).
+    """
+    # Collect all class ids
+    all_classes = set()
+    for gt in ground_truths:
+        all_classes.update(gt["labels"].tolist())
+    for pred in predictions:
+        all_classes.update(pred["labels"].tolist())
+
+    all_classes = {int(c) for c in all_classes}
+    # Remove background if present
+    if 0 in all_classes:
+        all_classes.remove(0)
+
+    if not all_classes:
+        return {
+            "mAP@0.5": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "total_predictions": 0,
+            "total_ground_truths": 0,
+            "is_proxy": use_proxy,
+        }
+
+    aps = []
+    per_class_precisions = []
+    per_class_recalls = []
+    total_tps = 0
+    total_fps = 0
+    total_gts = 0
+
+    for class_id in all_classes:
+        class_detections = []  # list of (score, is_tp)
+        class_n_gts = 0
+        class_tps = 0
+        class_fps = 0
+
+        for pred, gt in zip(predictions, ground_truths):
+            # GT for this class
+            gt_mask = (gt["labels"] == class_id)
+            gt_boxes = gt["boxes"][gt_mask]
+            class_n_gts += len(gt_boxes)
+
+            # Predictions for this class
+            pred_mask = (pred["labels"] == class_id)
+            pred_boxes = pred["boxes"][pred_mask]
+            pred_scores = pred["scores"][pred_mask]
+
+            # Proxy: threshold; Exact: keep all detections
+            if use_proxy:
+                score_mask = pred_scores > conf_threshold
+            else:
+                score_mask = pred_scores > 0.0
+
+            pred_boxes = pred_boxes[score_mask]
+            pred_scores = pred_scores[score_mask]
+
+            matched_gt = set()
+
+            if len(pred_scores) > 0:
+                sorted_indices = torch.argsort(pred_scores, descending=True)
+                pred_boxes = pred_boxes[sorted_indices]
+                pred_scores = pred_scores[sorted_indices]
+
+                for box, score in zip(pred_boxes, pred_scores):
+                    best_iou = 0.0
+                    best_gt_idx = -1
+
+                    for gt_idx, gt_box in enumerate(gt_boxes):
+                        if gt_idx in matched_gt:
+                            continue
+
+                        iou = compute_iou(box.numpy(), gt_box.numpy())
                         if iou > best_iou:
                             best_iou = iou
                             best_gt_idx = gt_idx
-                
-                if best_iou >= iou_threshold and best_gt_idx != -1:
-                    true_positives += 1
-                    matched_gt.add(best_gt_idx)
+
+                    is_tp = False
+                    if best_iou >= iou_threshold and best_gt_idx != -1:
+                        matched_gt.add(best_gt_idx)
+                        is_tp = True
+                        class_tps += 1
+                    else:
+                        class_fps += 1
+
+                    class_detections.append((score.item(), is_tp))
+
+        if class_n_gts == 0:
+            ap = 0.0
+            prec = 0.0
+            rec = 0.0
+        else:
+            if use_proxy:
+                # Single-threshold proxy
+                prec = class_tps / (class_tps + class_fps) if (class_tps + class_fps) > 0 else 0.0
+                rec = class_tps / class_n_gts
+                ap = (prec + rec) / 2.0
+            else:
+                # Exact AP via PR curve
+                if len(class_detections) == 0:
+                    ap = 0.0
+                    prec = 0.0
+                    rec = 0.0
                 else:
-                    false_positives += 1
-    
-    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
-    recall = true_positives / total_ground_truths if total_ground_truths > 0 else 0
-    
-    # Simplified mAP calculation
-    mAP = (precision + recall) / 2 if (precision + recall) > 0 else 0
-    
+                    class_detections.sort(key=lambda x: x[0], reverse=True)
+                    tps = np.array([1 if x[1] else 0 for x in class_detections], dtype=np.float32)
+                    fps = np.array([1 if not x[1] else 0 for x in class_detections], dtype=np.float32)
+
+                    cum_tps = np.cumsum(tps)
+                    cum_fps = np.cumsum(fps)
+
+                    prec_curve = cum_tps / (cum_tps + cum_fps)
+                    rec_curve = cum_tps / class_n_gts
+
+                    prec_curve = np.concatenate(([0.0], prec_curve, [0.0]))
+                    rec_curve = np.concatenate(([0.0], rec_curve, [1.0]))
+
+                    for i in range(len(prec_curve) - 2, -1, -1):
+                        prec_curve[i] = max(prec_curve[i], prec_curve[i + 1])
+
+                    indices = np.where(rec_curve[1:] != rec_curve[:-1])[0]
+                    ap = float(np.sum((rec_curve[indices + 1] - rec_curve[indices]) * prec_curve[indices + 1]))
+
+                    # For reporting: global P/R from counts
+                    prec = class_tps / (class_tps + class_fps) if (class_tps + class_fps) > 0 else 0.0
+                    rec = class_tps / class_n_gts
+
+        aps.append(ap)
+        per_class_precisions.append(prec)
+        per_class_recalls.append(rec)
+        total_tps += class_tps
+        total_fps += class_fps
+        total_gts += class_n_gts
+
+    mAP = float(np.mean(aps)) if aps else 0.0
+    mean_prec = float(np.mean(per_class_precisions)) if per_class_precisions else 0.0
+    mean_rec = float(np.mean(per_class_recalls)) if per_class_recalls else 0.0
+
     return {
-        'mAP@0.5': mAP,
-        'precision': precision,
-        'recall': recall,
-        'true_positives': true_positives,
-        'false_positives': false_positives,
-        'total_ground_truths': total_ground_truths,
-        'total_predictions': true_positives + false_positives
+        "mAP@0.5": mAP,
+        "precision": mean_prec,
+        "recall": mean_rec,
+        "total_predictions": total_tps + total_fps,
+        "total_ground_truths": total_gts,
+        "is_proxy": use_proxy,
     }
+
 
 
 def test(config: Config, checkpoint_path: str):
@@ -1068,6 +1336,8 @@ Examples:
                        help='Directory of images for batch inference')
     parser.add_argument('--conf-threshold', type=float, default=None,
                        help='Confidence threshold for detections')
+    parser.add_argument('--use-proxy-map', action='store_true',
+                       help='Use proxy mAP calculation (P+R)/2 instead of exact AP')
     
     # Output directories
     parser.add_argument('--checkpoint-dir', type=str, default=None,
