@@ -83,6 +83,7 @@ class Config:
         self.weight_decay = 0.0005
         self.lr_scheduler_step_size = 10
         self.lr_scheduler_gamma = 0.1
+        self.warmup_epochs = 5   
         
         # Data augmentation
         self.horizontal_flip_prob = 0.5
@@ -97,7 +98,6 @@ class Config:
         
         # Inference settings
         self.conf_threshold = 0.5  # Confidence threshold for detections
-        self.conf_threshold = 0.5  # Confidence threshold for detections
         self.nms_threshold = 0.3   # NMS IoU threshold
         self.use_proxy_map = False # Use proxy mAP (P+R)/2 instead of exact AP
         
@@ -105,6 +105,8 @@ class Config:
         self.checkpoint_dir = "checkpoints"
         self.output_dir = "outputs"
         self.results_dir = "results"
+        
+        self.model_name = "fasterrcnn"  # Default model name
         
         # Create directories
         os.makedirs(self.checkpoint_dir, exist_ok=True)
@@ -339,10 +341,7 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
     model.train()
     
     running_loss = 0.0
-    running_loss_classifier = 0.0
-    running_loss_box_reg = 0.0
-    running_loss_objectness = 0.0
-    running_loss_rpn_box_reg = 0.0
+    running_losses = {}  # Dynamic dictionary for all loss components
     
     skipped_batches = 0
     successful_batches = 0
@@ -376,22 +375,31 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
             
             # Statistics
             running_loss += losses.item()
-            running_loss_classifier += loss_dict['loss_classifier'].item()
-            running_loss_box_reg += loss_dict['loss_box_reg'].item()
-            running_loss_objectness += loss_dict['loss_objectness'].item()
-            running_loss_rpn_box_reg += loss_dict['loss_rpn_box_reg'].item()
+            
+            # Dynamically track all losses
+            for k, v in loss_dict.items():
+                if k not in running_losses:
+                    running_losses[k] = 0.0
+                running_losses[k] += v.item()
             
             successful_batches += 1
             
             # Update progress bar
             if (successful_batches + 1) % print_freq == 0:
                 avg_loss = running_loss / successful_batches if successful_batches > 0 else 0
-                pbar.set_postfix({
-                    'loss': f'{avg_loss:.4f}',
-                    'cls': f'{running_loss_classifier / successful_batches:.4f}' if successful_batches > 0 else '0.0000',
-                    'box': f'{running_loss_box_reg / successful_batches:.4f}' if successful_batches > 0 else '0.0000',
-                    'skipped': skipped_batches
-                })
+                
+                # Create postfix dict with main loss and up to 2 components
+                postfix = {'loss': f'{avg_loss:.4f}'}
+                
+                # Add first 2 components to pbar
+                count = 0
+                for k in sorted(running_losses.keys()):
+                    if count >= 2: break
+                    postfix[k] = f'{running_losses[k] / successful_batches:.4f}'
+                    count += 1
+                
+                postfix['skipped'] = skipped_batches
+                pbar.set_postfix(postfix)
         
         except Exception as e:
             # Log error and continue training
@@ -405,21 +413,16 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
         epoch_loss = running_loss / successful_batches
         epoch_stats = {
             'total_loss': epoch_loss,
-            'loss_classifier': running_loss_classifier / successful_batches,
-            'loss_box_reg': running_loss_box_reg / successful_batches,
-            'loss_objectness': running_loss_objectness / successful_batches,
-            'loss_rpn_box_reg': running_loss_rpn_box_reg / successful_batches,
             'skipped_batches': skipped_batches,
             'successful_batches': successful_batches
         }
+        # Add all individual losses
+        for k, v in running_losses.items():
+            epoch_stats[k] = v / successful_batches
     else:
         # No successful batches - return zero losses
         epoch_stats = {
             'total_loss': 0.0,
-            'loss_classifier': 0.0,
-            'loss_box_reg': 0.0,
-            'loss_objectness': 0.0,
-            'loss_rpn_box_reg': 0.0,
             'skipped_batches': skipped_batches,
             'successful_batches': 0
         }
@@ -430,7 +433,7 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
     return epoch_stats
 
 
-def train(config: Config):
+def train(config: Config, model_builder=None):
     """Main training function."""
     print("=" * 80)
     print("Starting Training")
@@ -477,7 +480,10 @@ def train(config: Config):
     
     # Create model
     print(f"\nCreating model on device: {config.device}")
-    model = get_model(config.num_classes, pretrained=config.pretrained)
+    if model_builder is None:
+        model = get_model(config.num_classes, pretrained=config.pretrained)
+    else:
+        model = model_builder(config.num_classes, pretrained=config.pretrained)
     model.to(config.device)
     
     # Create optimizer
@@ -512,13 +518,15 @@ def train(config: Config):
         current_lr = optimizer.param_groups[0]['lr']
         
         # Log statistics
+        # Log statistics
         print(f"\nEpoch {epoch}/{config.num_epochs}")
         print(f"  LR: {current_lr:.6f}")
         print(f"  Total Loss: {epoch_stats['total_loss']:.4f}")
-        print(f"  Classifier Loss: {epoch_stats['loss_classifier']:.4f}")
-        print(f"  Box Reg Loss: {epoch_stats['loss_box_reg']:.4f}")
-        print(f"  Objectness Loss: {epoch_stats['loss_objectness']:.4f}")
-        print(f"  RPN Box Reg Loss: {epoch_stats['loss_rpn_box_reg']:.4f}")
+        
+        # Log all individual losses
+        for k, v in epoch_stats.items():
+            if k not in ['total_loss', 'epoch', 'lr', 'skipped_batches', 'successful_batches']:
+                print(f"  {k}: {v:.4f}")
         if epoch_stats.get('skipped_batches', 0) > 0:
             print(f"  ⚠ Skipped batches: {epoch_stats['skipped_batches']} (invalid data)")
             print(f"  ✓ Successful batches: {epoch_stats['successful_batches']}")
@@ -528,10 +536,11 @@ def train(config: Config):
         training_history.append(epoch_stats)
         
         # Save checkpoint
+        # Save checkpoint
         if epoch % config.save_freq == 0 or epoch == config.num_epochs:
             checkpoint_path = os.path.join(
                 config.checkpoint_dir, 
-                f'fasterrcnn_epoch_{epoch}.pth'
+                f'{config.model_name}_epoch_{epoch}.pth'
             )
             torch.save({
                 'epoch': epoch,
@@ -546,7 +555,7 @@ def train(config: Config):
             # Save best model
             if epoch_stats['total_loss'] < best_loss:
                 best_loss = epoch_stats['total_loss']
-                best_path = os.path.join(config.checkpoint_dir, 'best_model.pth')
+                best_path = os.path.join(config.checkpoint_dir, f'{config.model_name}_best_model.pth')
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
@@ -559,47 +568,66 @@ def train(config: Config):
         print()
     
     # Save training history
-    history_path = os.path.join(config.results_dir, 'training_history.json')
+    history_path = os.path.join(config.results_dir, f'{config.model_name}_training_history.json')
     with open(history_path, 'w') as f:
         json.dump(training_history, f, indent=2)
     print(f"Training history saved to {history_path}")
     
     # Plot training curves
-    plot_training_curves(training_history, config.results_dir)
+    plot_training_curves(training_history, config.results_dir, config.model_name)
     
     print("\nTraining completed!")
     return model
 
 
-def plot_training_curves(history: List[Dict], save_dir: str):
+def plot_training_curves(history: List[Dict], save_dir: str, model_name: str = 'model'):
     """Plot training curves."""
+    if not history:
+        return
+        
     epochs = [h['epoch'] for h in history]
     total_loss = [h['total_loss'] for h in history]
-    classifier_loss = [h['loss_classifier'] for h in history]
-    box_reg_loss = [h['loss_box_reg'] for h in history]
     
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    # Identify all loss keys present in history
+    loss_keys = set()
+    for h in history:
+        for k in h.keys():
+            if k not in ['total_loss', 'epoch', 'lr', 'skipped_batches', 'successful_batches']:
+                loss_keys.add(k)
     
+    loss_keys = sorted(list(loss_keys))
+    num_plots = 1 + len(loss_keys)
+    
+    # Calculate grid size
+    cols = 3
+    rows = (num_plots + cols - 1) // cols
+    
+    fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 4*rows))
+    axes = axes.flatten()
+    
+    # Plot Total Loss
     axes[0].plot(epochs, total_loss, 'b-', linewidth=2)
     axes[0].set_xlabel('Epoch')
     axes[0].set_ylabel('Total Loss')
     axes[0].set_title('Total Loss vs Epoch')
     axes[0].grid(True, alpha=0.3)
     
-    axes[1].plot(epochs, classifier_loss, 'r-', linewidth=2)
-    axes[1].set_xlabel('Epoch')
-    axes[1].set_ylabel('Classifier Loss')
-    axes[1].set_title('Classifier Loss vs Epoch')
-    axes[1].grid(True, alpha=0.3)
+    # Plot individual losses
+    for i, key in enumerate(loss_keys):
+        values = [h.get(key, 0.0) for h in history]
+        ax = axes[i+1]
+        ax.plot(epochs, values, 'r-', linewidth=2)
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel(key)
+        ax.set_title(f'{key} vs Epoch')
+        ax.grid(True, alpha=0.3)
     
-    axes[2].plot(epochs, box_reg_loss, 'g-', linewidth=2)
-    axes[2].set_xlabel('Epoch')
-    axes[2].set_ylabel('Box Regression Loss')
-    axes[2].set_title('Box Regression Loss vs Epoch')
-    axes[2].grid(True, alpha=0.3)
+    # Hide empty subplots
+    for i in range(num_plots, len(axes)):
+        axes[i].axis('off')
     
     plt.tight_layout()
-    save_path = os.path.join(save_dir, 'training_curves.png')
+    save_path = os.path.join(save_dir, f'{model_name}_training_curves.png')
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"Training curves saved to {save_path}")
@@ -1135,7 +1163,7 @@ def calculate_map(predictions, ground_truths, conf_threshold=0.5, iou_threshold=
 
 
 
-def test(config: Config, checkpoint_path: str):
+def test(config: Config, checkpoint_path: str, model_builder=None):
     """Test the model."""
     print("=" * 80)
     print("Testing Model")
@@ -1168,7 +1196,10 @@ def test(config: Config, checkpoint_path: str):
     
     # Load model
     print(f"Loading model from {checkpoint_path}...")
-    model = get_model(config.num_classes, pretrained=False)
+    if model_builder is None:
+        model = get_model(config.num_classes, pretrained=False)
+    else:
+        model = model_builder(config.num_classes, pretrained=False)
     checkpoint = torch.load(checkpoint_path, map_location=config.device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(config.device)
@@ -1184,7 +1215,7 @@ def test(config: Config, checkpoint_path: str):
 # ============================================================================
 
 @torch.no_grad()
-def inference(config: Config, checkpoint_path: str, image_path: str, save_path: Optional[str] = None):
+def inference(config: Config, checkpoint_path: str, image_path: str, save_path: Optional[str] = None, model_builder=None):
     """Run inference on a single image."""
     print("=" * 80)
     print("Running Inference")
@@ -1201,7 +1232,10 @@ def inference(config: Config, checkpoint_path: str, image_path: str, save_path: 
     
     # Load model
     print(f"Loading model from {checkpoint_path}...")
-    model = get_model(config.num_classes, pretrained=False)
+    if model_builder is None:
+        model = get_model(config.num_classes, pretrained=False)
+    else:
+        model = model_builder(config.num_classes, pretrained=False)
     checkpoint = torch.load(checkpoint_path, map_location=config.device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.to(config.device)
