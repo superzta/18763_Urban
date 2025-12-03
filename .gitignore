@@ -72,3 +72,7 @@ temp/
 rcnn_env/
 
 test_img/
+
+# everything in labelling folder
+labelling/*
+!labelling/labelling.py

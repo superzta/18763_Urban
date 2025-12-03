@@ -659,120 +659,151 @@ def compute_iou(box1, box2):
 
 
 def create_evaluation_visualizations(images, predictions, ground_truths, config, num_samples=10):
-    """Create visualizations comparing predictions vs ground truth."""
+    """Create visualizations comparing predictions vs ground truth for each class."""
     
     # Load main config for class names
     with open(config.main_config_yaml, 'r') as f:
         main_config = yaml.safe_load(f)
     
     # Build class names list for selected classes
-    class_names = ['background']
+    # Model outputs: 0=background, 1=first selected, 2=second selected, etc.
+    model_class_names = ['background']
     for cls_id in config.urban_issue_classes:
-        class_names.append(main_config['names'][cls_id])
+        model_class_names.append(main_config['names'][cls_id])
     
-    # Select samples with ground truth boxes
-    samples_to_viz = []
-    for i, gt in enumerate(ground_truths):
-        if len(gt['boxes']) > 0:
-            samples_to_viz.append(i)
-        if len(samples_to_viz) >= num_samples:
-            break
-    
-    if not samples_to_viz:
-        print("No samples with ground truth boxes found for visualization")
-        return
-    
-    # Create comparison visualizations
-    for idx, sample_idx in enumerate(samples_to_viz):
-        img_tensor = images[sample_idx]
-        pred = predictions[sample_idx]
-        gt = ground_truths[sample_idx]
+    # Iterate through each selected class to generate specific visualizations
+    for i, global_cls_id in enumerate(config.urban_issue_classes):
+        class_name = main_config['names'][global_cls_id]
+        # Sanitize class name for filename
+        safe_class_name = "".join(x for x in class_name if x.isalnum() or x in (' ', '_', '-')).replace(' ', '')
         
-        # Convert tensor to PIL Image
-        img = F.to_pil_image(img_tensor)
+        model_cls_idx = i + 1  # 1-based index in model outputs
         
-        # Create figure with 3 subplots: Ground Truth, Predictions, Both
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        print(f"\nGenerating visualizations for class: {class_name} (Model Class {model_cls_idx})")
         
-        # Ground Truth
-        axes[0].imshow(img)
-        axes[0].set_title(f'Ground Truth ({len(gt["boxes"])} boxes)', fontsize=12, fontweight='bold')
-        for box, label in zip(gt['boxes'], gt['labels']):
-            x_min, y_min, x_max, y_max = box.numpy()
-            width = x_max - x_min
-            height = y_max - y_min
-            rect = patches.Rectangle(
-                (x_min, y_min), width, height,
-                linewidth=2, edgecolor='lime', facecolor='none'
-            )
-            axes[0].add_patch(rect)
-            axes[0].text(
-                x_min, y_min - 5,
-                f"GT: {class_names[label]}",
-                color='white', fontsize=9,
-                bbox=dict(facecolor='lime', alpha=0.7, edgecolor='none', pad=2)
-            )
-        axes[0].axis('off')
+        # Find samples that contain this class in ground truth
+        samples_to_viz = []
+        for idx, gt in enumerate(ground_truths):
+            # Check if this sample has the current class
+            if model_cls_idx in gt['labels']:
+                samples_to_viz.append(idx)
+            
+            if len(samples_to_viz) >= num_samples:
+                break
         
-        # Predictions (filtered by confidence)
-        mask = pred['scores'] > config.conf_threshold
-        pred_boxes = pred['boxes'][mask]
-        pred_labels = pred['labels'][mask]
-        pred_scores = pred['scores'][mask]
+        if not samples_to_viz:
+            print(f"  No samples found with ground truth for {class_name}")
+            continue
+            
+        print(f"  Found {len(samples_to_viz)} samples for {class_name}")
         
-        axes[1].imshow(img)
-        axes[1].set_title(f'Predictions ({len(pred_boxes)} boxes, conf>{config.conf_threshold})', 
-                         fontsize=12, fontweight='bold')
-        for box, label, score in zip(pred_boxes, pred_labels, pred_scores):
-            x_min, y_min, x_max, y_max = box.numpy()
-            width = x_max - x_min
-            height = y_max - y_min
-            rect = patches.Rectangle(
-                (x_min, y_min), width, height,
-                linewidth=2, edgecolor='red', facecolor='none'
-            )
-            axes[1].add_patch(rect)
-            axes[1].text(
-                x_min, y_min - 5,
-                f"Pred: {class_names[label]} ({score:.2f})",
-                color='white', fontsize=9,
-                bbox=dict(facecolor='red', alpha=0.7, edgecolor='none', pad=2)
-            )
-        axes[1].axis('off')
-        
-        # Both overlaid
-        axes[2].imshow(img)
-        axes[2].set_title('Ground Truth (Green) vs Predictions (Red)', fontsize=12, fontweight='bold')
-        
-        # Draw ground truth in green
-        for box, label in zip(gt['boxes'], gt['labels']):
-            x_min, y_min, x_max, y_max = box.numpy()
-            width = x_max - x_min
-            height = y_max - y_min
-            rect = patches.Rectangle(
-                (x_min, y_min), width, height,
-                linewidth=2, edgecolor='lime', facecolor='none', linestyle='--'
-            )
-            axes[2].add_patch(rect)
-        
-        # Draw predictions in red
-        for box, label, score in zip(pred_boxes, pred_labels, pred_scores):
-            x_min, y_min, x_max, y_max = box.numpy()
-            width = x_max - x_min
-            height = y_max - y_min
-            rect = patches.Rectangle(
-                (x_min, y_min), width, height,
-                linewidth=2, edgecolor='red', facecolor='none'
-            )
-            axes[2].add_patch(rect)
-        axes[2].axis('off')
-        
-        plt.tight_layout()
-        save_path = os.path.join(config.results_dir, f'eval_comparison_{idx+1}.png')
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        plt.close()
-    
-    print(f"Saved {len(samples_to_viz)} comparison visualizations to {config.results_dir}/eval_comparison_*.png")
+        # Create comparison visualizations for this class
+        for viz_idx, sample_idx in enumerate(samples_to_viz):
+            img_tensor = images[sample_idx]
+            pred = predictions[sample_idx]
+            gt = ground_truths[sample_idx]
+            
+            # Convert tensor to PIL Image
+            img = F.to_pil_image(img_tensor)
+            
+            # Create figure with 3 subplots: Ground Truth, Predictions, Both
+            fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+            
+            # Ground Truth
+            axes[0].imshow(img)
+            axes[0].set_title(f'Ground Truth ({len(gt["boxes"])} boxes)', fontsize=12, fontweight='bold')
+            for box, label in zip(gt['boxes'], gt['labels']):
+                x_min, y_min, x_max, y_max = box.numpy()
+                width = x_max - x_min
+                height = y_max - y_min
+                
+                # Highlight the current class being analyzed
+                is_target_class = (label.item() == model_cls_idx)
+                color = 'lime' if is_target_class else 'gray'
+                alpha = 1.0 if is_target_class else 0.5
+                linewidth = 3 if is_target_class else 1
+                
+                rect = patches.Rectangle(
+                    (x_min, y_min), width, height,
+                    linewidth=linewidth, edgecolor=color, facecolor='none'
+                )
+                axes[0].add_patch(rect)
+                axes[0].text(
+                    x_min, y_min - 5,
+                    f"GT: {model_class_names[label]}",
+                    color='white', fontsize=9,
+                    bbox=dict(facecolor=color, alpha=0.7, edgecolor='none', pad=2)
+                )
+            axes[0].axis('off')
+            
+            # Predictions (filtered by confidence)
+            mask = pred['scores'] > config.conf_threshold
+            pred_boxes = pred['boxes'][mask]
+            pred_labels = pred['labels'][mask]
+            pred_scores = pred['scores'][mask]
+            
+            axes[1].imshow(img)
+            axes[1].set_title(f'Predictions ({len(pred_boxes)} boxes, conf>{config.conf_threshold})', 
+                             fontsize=12, fontweight='bold')
+            for box, label, score in zip(pred_boxes, pred_labels, pred_scores):
+                x_min, y_min, x_max, y_max = box.numpy()
+                width = x_max - x_min
+                height = y_max - y_min
+                
+                # Highlight the current class being analyzed
+                is_target_class = (label.item() == model_cls_idx)
+                color = 'red' if is_target_class else 'orange' # Red for target, Orange for others
+                
+                rect = patches.Rectangle(
+                    (x_min, y_min), width, height,
+                    linewidth=2, edgecolor=color, facecolor='none'
+                )
+                axes[1].add_patch(rect)
+                axes[1].text(
+                    x_min, y_min - 5,
+                    f"Pred: {model_class_names[label]} ({score:.2f})",
+                    color='white', fontsize=9,
+                    bbox=dict(facecolor=color, alpha=0.7, edgecolor='none', pad=2)
+                )
+            axes[1].axis('off')
+            
+            # Both overlaid
+            axes[2].imshow(img)
+            axes[2].set_title(f'GT (Green) vs Pred (Red) - {class_name}', fontsize=12, fontweight='bold')
+            
+            # Draw ground truth
+            for box, label in zip(gt['boxes'], gt['labels']):
+                if label.item() != model_cls_idx: continue # Only show target class GT for clarity
+                
+                x_min, y_min, x_max, y_max = box.numpy()
+                width = x_max - x_min
+                height = y_max - y_min
+                rect = patches.Rectangle(
+                    (x_min, y_min), width, height,
+                    linewidth=2, edgecolor='lime', facecolor='none', linestyle='--'
+                )
+                axes[2].add_patch(rect)
+            
+            # Draw predictions
+            for box, label, score in zip(pred_boxes, pred_labels, pred_scores):
+                if label.item() != model_cls_idx: continue # Only show target class Pred for clarity
+                
+                x_min, y_min, x_max, y_max = box.numpy()
+                width = x_max - x_min
+                height = y_max - y_min
+                rect = patches.Rectangle(
+                    (x_min, y_min), width, height,
+                    linewidth=2, edgecolor='red', facecolor='none'
+                )
+                axes[2].add_patch(rect)
+            axes[2].axis('off')
+            
+            plt.tight_layout()
+            save_path = os.path.join(config.results_dir, f'eval_comparison_{safe_class_name}_{viz_idx+1}.png')
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            
+        print(f"  Saved {len(samples_to_viz)} visualizations to {config.results_dir}/eval_comparison_{safe_class_name}_*.png")
 
 
 @torch.no_grad()

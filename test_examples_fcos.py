@@ -29,8 +29,15 @@ def example_2_road_issues(checkpoint_path='checkpoints/fcos_best_model.pth'):
     print("EXAMPLE 2: Testing FCOS on Road-Related Issues")
     print("="*80)
     
-    config = Config(urban_issue_classes=[0, 1, 3])  # Road damage, potholes, signs
-    config.conf_threshold = 0.5
+    # Road damage (0), Potholes (1), Broken Road Signs (3)
+    config = Config(urban_issue_classes=[0, 1, 3])
+    
+    # Allow user to override threshold
+    user_thresh = input("Enter confidence threshold (default: 0.5): ").strip()
+    if user_thresh:
+        config.conf_threshold = float(user_thresh)
+    else:
+        config.conf_threshold = 0.5
     
     results = test(config, checkpoint_path)
     
@@ -38,6 +45,8 @@ def example_2_road_issues(checkpoint_path='checkpoints/fcos_best_model.pth'):
     print(f"  mAP@0.5: {results['mAP@0.5']:.4f}")
     print(f"  Precision: {results['precision']:.4f}")
     print(f"  Recall: {results['recall']:.4f}")
+    print("\nVisualizations have been saved to the 'results' directory.")
+    print("Check for files named 'eval_comparison_{ClassName}_{i}.png'")
 
 
 def example_5_all_classes(checkpoint_path='checkpoints/fcos_best_model.pth'):

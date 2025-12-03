@@ -33,7 +33,12 @@ def example_2_road_issues(checkpoint_path = 'checkpoints/best_model_rcnn.pth'):
     print("="*80)
     
     config = Config(urban_issue_classes=[0, 1, 3])  # Road damage, potholes, signs
-    config.conf_threshold = 0.5
+    config.conf_threshold = input("Enter confidence threshold (default: 0.5): ").strip()
+    
+    if config.conf_threshold == '':
+        config.conf_threshold = 0.5
+    else:
+        config.conf_threshold = float(config.conf_threshold)
     
     results = test(config, checkpoint_path)
     
