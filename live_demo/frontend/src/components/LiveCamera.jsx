@@ -60,8 +60,8 @@ export default function LiveCamera({ apiUrl }) {
         };
         
         fetchModelConfig();
-        // Poll for config changes every 5 seconds
-        const interval = setInterval(fetchModelConfig, 5000);
+        // Poll for config changes every 10 seconds to reduce ngrok rate limits
+        const interval = setInterval(fetchModelConfig, 10000);
         return () => clearInterval(interval);
     }, []);
 
@@ -441,7 +441,7 @@ export default function LiveCamera({ apiUrl }) {
                     } catch (e) {
                         console.error('[Viewer] HTTP poll error:', e);
                     }
-                }, 200); // Poll every 200ms for faster updates (5 FPS max)
+                }, 500); // Poll every 500ms to reduce ngrok rate limits (was 200ms)
         };
 
         // If not connected via WebSocket, poll immediately
