@@ -58,7 +58,7 @@ export default function LiveCamera({ apiUrl }) {
                 console.error('[LiveCamera] Failed to fetch model config:', error);
             }
         };
-        
+
         fetchModelConfig();
         // Poll for config changes every 10 seconds to reduce ngrok rate limits
         const interval = setInterval(fetchModelConfig, 10000);
@@ -70,33 +70,33 @@ export default function LiveCamera({ apiUrl }) {
         let retryCount = 0;
         const maxRetries = 3;
         let timeoutId;
-        
+
         const fetchServerInfo = async () => {
             try {
                 // Always use same origin - Vite proxy handles routing
                 const fetchUrl = window.location.origin;
-                
+
                 console.log(`[LiveCamera] Attempt ${retryCount + 1}/${maxRetries} - Fetching from: ${fetchUrl}/api/info`);
-                
+
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-                
+
                 const response = await fetch(`${fetchUrl}/api/info`, {
                     headers: {
                         'Accept': 'application/json',
                     },
                     signal: controller.signal
                 });
-                
+
                 clearTimeout(timeoutId);
-                
+
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
-                
+
                 const data = await response.json();
                 console.log('[LiveCamera] Server info received:', JSON.stringify(data, null, 2));
-                
+
                 // Always set serverInfo regardless of ngrok status
                 if (data.frontend_url) {
                     console.log('[LiveCamera] Setting server info with frontend_url:', data.frontend_url);
@@ -115,7 +115,7 @@ export default function LiveCamera({ apiUrl }) {
                 }
             } catch (error) {
                 console.error(`[LiveCamera] Fetch failed (attempt ${retryCount + 1}/${maxRetries}):`, error);
-                
+
                 retryCount++;
                 if (retryCount < maxRetries) {
                     console.log(`[LiveCamera] Retrying in 1 second...`);
@@ -133,9 +133,9 @@ export default function LiveCamera({ apiUrl }) {
                 }
             }
         };
-        
+
         fetchServerInfo();
-        
+
         return () => {
             if (timeoutId) clearTimeout(timeoutId);
         };
@@ -156,7 +156,7 @@ export default function LiveCamera({ apiUrl }) {
     // Skip WebSocket on phone - go straight to HTTP for reliability through ngrok
     useEffect(() => {
         console.log('[LiveCamera] Connection effect triggered - serverInfo:', serverInfo ? 'present' : 'null', 'mode:', mode);
-        
+
         if (!serverInfo) {
             console.log('[LiveCamera] Skipping - no serverInfo yet');
             return;
@@ -168,12 +168,12 @@ export default function LiveCamera({ apiUrl }) {
             console.log('[Phone] Origin:', window.location.origin);
             console.log('[Phone] Hostname:', window.location.hostname);
             console.log('[Phone] Setting up HTTP mode directly (bypassing health check)...');
-            
+
             // Set connection immediately - ngrok blocking is causing issues
             setUseHttpFallback(true);
             setIsConnected(true);
             console.log('[Phone] ✓ Connection mode set: useHttpFallback=true, isConnected=true');
-            
+
             return;
         }
 
@@ -183,13 +183,13 @@ export default function LiveCamera({ apiUrl }) {
         const wsUrl = `${wsProtocol}//${window.location.host}/api/ws/stream?role=${role}`;
 
         console.log(`[Viewer] Creating WebSocket connection:`, wsUrl);
-        
+
         let socket;
         let connectionTimeout;
-        
+
         try {
             socket = new WebSocket(wsUrl);
-            
+
             // Set connection timeout
             connectionTimeout = setTimeout(() => {
                 if (socket.readyState !== WebSocket.OPEN) {
@@ -197,7 +197,7 @@ export default function LiveCamera({ apiUrl }) {
                     socket.close();
                 }
             }, 5000);
-            
+
         } catch (error) {
             console.error('[Viewer] Failed to create WebSocket:', error);
             return;
@@ -211,14 +211,14 @@ export default function LiveCamera({ apiUrl }) {
 
         socket.onmessage = (event) => {
             const data = JSON.parse(event.data);
-            
+
             // Handle model change notifications
             if (data.type === 'model_changed') {
                 console.log('[Viewer] Model changed:', data.config);
                 setModelConfig(data.config);
                 return;
             }
-            
+
             // Handle normal frame data
             setResults(data);
             setViewerImage(data.image);
@@ -259,106 +259,106 @@ export default function LiveCamera({ apiUrl }) {
             console.log('[LiveCamera] isConnected:', isConnected);
             console.log('[LiveCamera] useHttpFallback:', useHttpFallback);
             console.log('[LiveCamera] videoRef.current:', videoRef.current ? 'exists' : 'null');
-            
+
             // Skip health check - just start streaming (ngrok causes issues with initial requests)
-            
+
             if (mode === 'client' && isConnected && videoRef.current) {
                 try {
                     console.log('[Phone] Requesting camera access...');
                     const stream = await navigator.mediaDevices.getUserMedia({
-                        video: { 
+                        video: {
                             facingMode: 'environment',
                             width: { ideal: 320 }, // Smaller = faster transmission & inference
                             height: { ideal: 240 }
                         }
                     });
-                    
+
                     videoRef.current.srcObject = stream;
                     console.log('[Phone] Camera stream obtained');
-                    
+
                     // Wait for video to be ready
                     videoRef.current.onloadedmetadata = () => {
                         console.log('[Phone] ===== Video metadata loaded =====');
                         console.log('[Phone] Video dimensions:', videoRef.current.videoWidth, 'x', videoRef.current.videoHeight);
                         console.log('[Phone] Starting adaptive frame capture...');
                         videoRef.current.play();
-                        
+
                         // Adaptive frame sending - send next frame only after processing completes
                         const captureAndSendFrame = async () => {
                             const now = Date.now();
-                            
+
                             // Minimum interval between frames (avoid overwhelming backend)
                             const minInterval = 300; // 300ms = ~3 FPS max
                             if (now - lastSendTime < minInterval) {
                                 animationFrameId = requestAnimationFrame(captureAndSendFrame);
                                 return;
                             }
-                            
+
                             // Skip if still processing previous frame
                             if (isProcessing) {
                                 animationFrameId = requestAnimationFrame(captureAndSendFrame);
                                 return;
                             }
-                            
-                            if (videoRef.current && canvasRef.current) {
-                                    const video = videoRef.current;
-                                    
-                                    // Check if video has valid dimensions
-                                    if (video.videoWidth === 0 || video.videoHeight === 0) {
-                                        console.warn('[Phone] Video not ready yet, skipping frame');
-                                        animationFrameId = requestAnimationFrame(captureAndSendFrame);
-                                        return;
-                                    }
-                                    
-                                    isProcessing = true; // Lock to prevent concurrent sends
-                                    
-                                    try {
-                                        const context = canvasRef.current.getContext('2d');
-                                        canvasRef.current.width = video.videoWidth;
-                                        canvasRef.current.height = video.videoHeight;
-                                        context.drawImage(video, 0, 0);
 
-                                        const base64 = canvasRef.current.toDataURL('image/jpeg', 0.3); // Aggressive compression for speed
-                                        
-                                        frameCount++;
-                                        const isFirstFrame = !streamStarted;
-                                        if (isFirstFrame) {
-                                            console.log('[Phone] First frame sent, dimensions:', video.videoWidth, 'x', video.videoHeight);
-                                            console.log('[Phone] Using HTTP mode with adaptive frame rate');
-                                            streamStarted = true;
-                                        }
-                                        
-                                        lastSendTime = now;
-                                        
+                            if (videoRef.current && canvasRef.current) {
+                                const video = videoRef.current;
+
+                                // Check if video has valid dimensions
+                                if (video.videoWidth === 0 || video.videoHeight === 0) {
+                                    console.warn('[Phone] Video not ready yet, skipping frame');
+                                    animationFrameId = requestAnimationFrame(captureAndSendFrame);
+                                    return;
+                                }
+
+                                isProcessing = true; // Lock to prevent concurrent sends
+
+                                try {
+                                    const context = canvasRef.current.getContext('2d');
+                                    canvasRef.current.width = video.videoWidth;
+                                    canvasRef.current.height = video.videoHeight;
+                                    context.drawImage(video, 0, 0);
+
+                                    const base64 = canvasRef.current.toDataURL('image/jpeg', 0.3); // Aggressive compression for speed
+
+                                    frameCount++;
+                                    const isFirstFrame = !streamStarted;
+                                    if (isFirstFrame) {
+                                        console.log('[Phone] First frame sent, dimensions:', video.videoWidth, 'x', video.videoHeight);
+                                        console.log('[Phone] Using HTTP mode with adaptive frame rate');
+                                        streamStarted = true;
+                                    }
+
+                                    lastSendTime = now;
+
                                     if (useHttpFallback) {
                                         // HTTP fallback: POST to backend with TIMEOUT
                                         const sendTime = Date.now();
-                                        
+
                                         if (isFirstFrame) {
                                             console.log('[Phone] ===== SENDING FIRST FRAME =====');
                                             console.log('[Phone] Target URL:', `${window.location.origin}/api/frame`);
                                         }
-                                        
+
                                         try {
                                             // Create abort controller for timeout
                                             const controller = new AbortController();
                                             const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-                                            
+
                                             const response = await fetch(`${window.location.origin}/api/frame`, {
                                                 method: 'POST',
                                                 headers: { 'Content-Type': 'application/json' },
                                                 body: JSON.stringify({ image: base64 }),
                                                 signal: controller.signal
                                             });
-                                            
+
                                             clearTimeout(timeoutId);
                                             const result = await response.json();
                                             const elapsed = Date.now() - sendTime;
-                                            
+
                                             if (isFirstFrame || frameCount % 10 === 0) {
                                                 console.log(`[Phone] Inference time: ${elapsed}ms`);
                                             }
-                                            
+
                                             if (result.status === 'busy') {
                                                 // Backend busy, slow down
                                                 console.warn('[Phone] Backend busy');
@@ -373,21 +373,21 @@ export default function LiveCamera({ apiUrl }) {
                                                 console.error(`[Phone] HTTP POST failed:`, e);
                                             }
                                         }
-                                        } else if (ws && ws.readyState === WebSocket.OPEN) {
-                                            // WebSocket
-                                            ws.send(base64);
-                                        }
-                                    } catch (captureError) {
-                                        console.error('[Phone] Frame capture error:', captureError);
-                                    } finally {
-                                        isProcessing = false; // Release lock - ready for next frame
+                                    } else if (ws && ws.readyState === WebSocket.OPEN) {
+                                        // WebSocket
+                                        ws.send(base64);
                                     }
+                                } catch (captureError) {
+                                    console.error('[Phone] Frame capture error:', captureError);
+                                } finally {
+                                    isProcessing = false; // Release lock - ready for next frame
                                 }
-                            
+                            }
+
                             // Schedule next frame
                             animationFrameId = requestAnimationFrame(captureAndSendFrame);
                         };
-                        
+
                         // Start adaptive frame capture after video stabilizes
                         setTimeout(() => {
                             captureAndSendFrame();
@@ -410,38 +410,38 @@ export default function LiveCamera({ apiUrl }) {
             }
         };
     }, [mode, isConnected, ws, useHttpFallback]);
-    
+
     // HTTP polling for viewer when phone uses fallback OR WebSocket fails
     useEffect(() => {
         if (mode !== 'host') return;
-        
+
         let pollInterval;
-        
+
         // Start polling immediately if not connected, or after a delay if connected
         const startPolling = () => {
             if (pollInterval) return;
-            
+
             console.log('[Viewer] Starting HTTP polling...');
             pollInterval = setInterval(async () => {
                 // If we have a healthy WebSocket connection receiving data, skip polling
                 // (We check if we received a frame recently via WS?)
                 // For now, we'll just poll as a backup if we don't have an image or if isConnected is false
-                
-                    try {
-                        const response = await fetch(`${window.location.origin}/api/latest`);
-                        if (!response.ok) return;
-                        
-                        const data = await response.json();
-                        
-                        if (data.image) {
-                            setResults(data);
-                            setViewerImage(data.image);
-                            updateFps();
-                        }
-                    } catch (e) {
-                        console.error('[Viewer] HTTP poll error:', e);
+
+                try {
+                    const response = await fetch(`${window.location.origin}/api/latest`);
+                    if (!response.ok) return;
+
+                    const data = await response.json();
+
+                    if (data.image) {
+                        setResults(data);
+                        setViewerImage(data.image);
+                        updateFps();
                     }
-                }, 500); // Poll every 500ms to reduce ngrok rate limits (was 200ms)
+                } catch (e) {
+                    console.error('[Viewer] HTTP poll error:', e);
+                }
+            }, 500); // Poll every 500ms to reduce ngrok rate limits (was 200ms)
         };
 
         // If not connected via WebSocket, poll immediately
@@ -455,10 +455,10 @@ export default function LiveCamera({ apiUrl }) {
                     startPolling();
                 }
             }, 3000);
-            
+
             return () => clearTimeout(checkTimeout);
         }
-        
+
         return () => {
             if (pollInterval) clearInterval(pollInterval);
         };
@@ -484,22 +484,22 @@ export default function LiveCamera({ apiUrl }) {
 
     const updateFps = () => {
         const now = Date.now();
-        
+
         // Calculate instant FPS based on time since last frame
         const timeSinceLastFrame = now - lastFrameDisplayTimeRef.current;
         const instantFps = timeSinceLastFrame > 0 ? 1000 / timeSinceLastFrame : 0;
-        
+
         // Update counter for averaged FPS
         fpsCounterRef.current.frameCount++;
         const elapsed = now - fpsCounterRef.current.lastTime;
-        
+
         if (elapsed >= 1000) { // Update display every second
             const avgFps = (fpsCounterRef.current.frameCount / elapsed) * 1000;
             setFps(avgFps);
             fpsCounterRef.current.frameCount = 0;
             fpsCounterRef.current.lastTime = now;
         }
-        
+
         // Record this frame display time
         lastFrameDisplayTimeRef.current = now;
     };
@@ -510,20 +510,20 @@ export default function LiveCamera({ apiUrl }) {
             console.log('[Viewer] Switching to model:', modelType);
             console.log('[Viewer] Current origin:', window.location.origin);
             console.log('[Viewer] Request body:', JSON.stringify({ type: modelType }));
-            
+
             const response = await fetch(`${window.location.origin}/api/config`, {
                 method: 'POST',
-                headers: { 
+                headers: {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 },
                 body: JSON.stringify({ type: modelType })
             });
-            
+
             console.log('[Viewer] Response received');
             console.log('[Viewer] Response status:', response.status);
             console.log('[Viewer] Response headers:', [...response.headers.entries()]);
-            
+
             if (response.ok) {
                 const data = await response.json();
                 console.log('[Viewer] ✓ Model switched successfully:', data);
@@ -541,26 +541,26 @@ export default function LiveCamera({ apiUrl }) {
         // Determine the URL to show in QR code
         // ONLY use ngrok URL - no localhost fallback
         const frontendUrl = serverInfo?.frontend_url || serverInfo?.qr_code_url;
-        
+
         // If no ngrok URL, show error
         if (!frontendUrl) {
             return (
-                <div className="flex flex-col items-center justify-center p-8 bg-red-900/20 border border-red-700 rounded-xl">
-                    <div className="text-red-400 text-center">
-                        <h2 className="text-2xl font-bold mb-4">Ngrok Not Configured</h2>
-                        <p className="mb-4">Remote access requires ngrok configuration.</p>
-                        <div className="bg-gray-900 p-4 rounded-lg text-left max-w-2xl">
-                            <p className="text-sm text-gray-300 mb-2"><strong>Step 1:</strong> Get free ngrok token</p>
-                            <p className="text-xs text-blue-400 mb-3">https://dashboard.ngrok.com/signup</p>
-                            
-                            <p className="text-sm text-gray-300 mb-2"><strong>Step 2:</strong> Add to .env file</p>
-                            <code className="text-xs text-green-400 block mb-3">NGROK_AUTHTOKEN=your_token_here</code>
-                            
-                            <p className="text-sm text-gray-300 mb-2"><strong>Step 3:</strong> Restart services</p>
-                            <code className="text-xs text-yellow-400 block">docker-compose down && docker-compose up</code>
+                <div className="flex flex-col items-center justify-center p-8 bg-red-900/20 border border-red-700 rounded-3xl backdrop-blur-md">
+                    <div className="text-red-400 text-center max-w-lg">
+                        <h2 className="text-2xl font-semibold mb-4 tracking-tight">Ngrok Not Configured</h2>
+                        <p className="mb-6 text-red-300/80">Remote access requires ngrok configuration.</p>
+                        <div className="bg-black/40 p-6 rounded-2xl text-left border border-white/5">
+                            <p className="text-sm text-gray-300 mb-2 font-medium">Step 1: Get free ngrok token</p>
+                            <p className="text-xs text-blue-400 mb-4 font-mono">https://dashboard.ngrok.com/signup</p>
+
+                            <p className="text-sm text-gray-300 mb-2 font-medium">Step 2: Add to .env file</p>
+                            <code className="text-xs text-green-400 block mb-4 font-mono bg-black/50 p-2 rounded">NGROK_AUTHTOKEN=your_token_here</code>
+
+                            <p className="text-sm text-gray-300 mb-2 font-medium">Step 3: Restart services</p>
+                            <code className="text-xs text-yellow-400 block font-mono bg-black/50 p-2 rounded">docker-compose down && docker-compose up</code>
                         </div>
                         {serverInfo?.error && (
-                            <p className="text-xs text-red-300 mt-4">Error: {serverInfo.error}</p>
+                            <p className="text-xs text-red-300 mt-6 bg-red-900/30 p-3 rounded-lg">Error: {serverInfo.error}</p>
                         )}
                     </div>
                 </div>
@@ -568,138 +568,139 @@ export default function LiveCamera({ apiUrl }) {
         }
 
         return (
-            <div className="space-y-6">
-                {/* Model Selector */}
-                {modelConfig && Object.keys(availableModels).length > 0 && (
-                    <div className="bg-gray-800 rounded-xl p-4">
-                        <div className="flex items-center gap-3 mb-3">
-                            <Cpu size={20} className="text-blue-400" />
-                            <h3 className="text-lg font-bold">Detection Model</h3>
-                        </div>
-                        <div className="grid grid-cols-3 gap-3">
-                            {Object.entries(availableModels).map(([key, model]) => (
-                                <button
-                                    key={key}
-                                    onClick={() => handleModelSwitch(key)}
-                                    className={`p-3 rounded-lg border-2 transition-all ${
-                                        modelConfig.type === key
-                                            ? 'border-blue-500 bg-blue-900/30 text-blue-300'
-                                            : 'border-gray-600 bg-gray-700 text-gray-300 hover:border-gray-500'
-                                    }`}
-                                >
-                                    <div className="font-bold text-sm">{model.name}</div>
-                                    <div className="text-xs mt-1 opacity-70">{model.description}</div>
-                                    {modelConfig.type === key && (
-                                        <div className="text-xs mt-2 text-green-400 font-medium">✓ Active</div>
-                                    )}
-                                </button>
-                            ))}
-                        </div>
-                        <div className="mt-3 text-xs text-gray-400">
-                            <strong>Current:</strong> {availableModels[modelConfig.type]?.name || modelConfig.type}
-                            {' • '}
-                            <strong>Confidence:</strong> {(modelConfig.conf_threshold * 100).toFixed(0)}%
-                        </div>
-                    </div>
-                )}
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="flex flex-col items-center gap-6 text-center p-6 bg-gray-800 rounded-xl">
-                    {/* Connection Status Badge */}
-                    <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-green-900/30 text-green-400">
-                        <Globe size={16} />
-                        <span className="text-sm font-medium">Remote Access Enabled</span>
-                    </div>
+            <div className="flex h-[calc(100vh-140px)] gap-6">
+                {/* Sidebar - Controls & Info */}
+                <div className="w-80 flex-shrink-0 flex flex-col gap-6 overflow-y-auto pr-2 custom-scrollbar">
 
-                    <div className="bg-white p-4 rounded-xl">
-                        <QRCodeSVG value={frontendUrl} size={200} />
-                    </div>
-                    
-                    <div>
-                        <h2 className="text-xl font-bold mb-2">
-                            Scan from Anywhere
-                        </h2>
-                        <p className="text-gray-400 text-sm mb-2">
-                            Scan this QR code with your phone from <strong>anywhere in the world</strong>.
-                            <br />
-                            Works on any network - Wi-Fi or cellular data!
+                    {/* Connection Card */}
+                    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-6 flex flex-col items-center text-center shadow-xl">
+                        <div className="bg-white p-3 rounded-2xl mb-4 shadow-inner">
+                            <QRCodeSVG value={frontendUrl} size={140} />
+                        </div>
+
+                        <h2 className="text-lg font-semibold text-white mb-1 tracking-tight">Scan to Connect</h2>
+                        <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+                            Use your phone camera to scan and start streaming live video.
                         </p>
 
-                        {/* URL Display */}
-                        <div className="mt-4 bg-gray-900 p-3 rounded-lg">
-                            <p className="text-xs text-gray-400 mb-1">Public URL:</p>
-                            <code className="text-xs text-green-400 break-all">{frontendUrl}</code>
-                        </div>
-
-                        <div className="mt-4 bg-yellow-900/20 border border-yellow-600 p-3 rounded-lg text-left">
-                            <p className="text-xs text-yellow-300 font-bold mb-2">IMPORTANT:</p>
-                            <p className="text-xs text-gray-300 mb-1">
-                                1. On phone: Click <strong className="text-yellow-300">"Visit Site"</strong> when ngrok warning appears
-                            </p>
-                            <p className="text-xs text-gray-300">
-                                2. Allow camera when prompted
-                            </p>
-                        </div>
-                        
-                        <div className="mt-2 bg-green-900/20 border border-green-700 p-3 rounded-lg">
-                            <p className="text-xs text-green-300">
-                                <strong>Ready!</strong> Accessible from anywhere in the world.
-                            </p>
+                        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-500 ${isConnected || viewerImage
+                                ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                                : 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                            }`}>
+                            <div className={`w-2 h-2 rounded-full ${isConnected || viewerImage ? 'bg-green-400 animate-pulse' : 'bg-yellow-400'}`} />
+                            {isConnected ? 'Connected via WS' : viewerImage ? 'Connected via HTTP' : 'Waiting for Device...'}
                         </div>
                     </div>
-                    
-                    <div className={`flex items-center gap-2 ${isConnected || viewerImage ? 'text-green-400' : 'text-yellow-400'}`}>
-                        <Monitor size={20} />
-                        <span>
-                            {isConnected ? '✓ Viewer Connected (WS)' : 
-                             viewerImage ? '✓ Viewer Connected (HTTP)' : 
-                             'Waiting for connection...'}
-                        </span>
-                    </div>
-                </div>
 
-                <div className="bg-black rounded-xl overflow-hidden relative min-h-[400px] flex items-center justify-center border border-gray-700">
-                    {viewerImage ? (
-                        <div className="relative w-full h-full">
-                            <img src={viewerImage} alt="Live Stream" className="w-full h-full object-contain" />
-                            {/* Canvas overlay for better alignment */}
-                            <CanvasOverlay 
-                                image={viewerImage} 
-                                boxes={results?.boxes} 
-                                labels={results?.labels}
-                                classNames={results?.class_names}
-                                scores={results?.scores}
-                                severities={results?.severities}
-                                classColors={classColors}
-                            />
-                            
-                            {/* Detection Stats Overlay */}
-                            {results && (
-                                <div className="absolute top-4 right-4 bg-black/80 text-white px-4 py-2 rounded-lg text-sm backdrop-blur-sm">
-                                    <div className="font-bold text-green-400">{results.boxes?.length || 0} Detections</div>
-                                    <div className="text-xs text-blue-300 mt-1">
-                                        {fps > 0 ? `${fps.toFixed(1)} FPS` : 'Calculating...'}
-                                    </div>
-                                    {modelConfig && (
-                                        <div className="text-xs text-gray-300 mt-1">
-                                            {availableModels[modelConfig.type]?.name || modelConfig.type}
+                    {/* Model Selector */}
+                    {modelConfig && Object.keys(availableModels).length > 0 && (
+                        <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-5 shadow-xl flex-1 flex flex-col">
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
+                                    <Cpu size={16} className="text-blue-400" />
+                                    Model
+                                </h3>
+                                <span className="text-xs text-gray-500 font-mono">
+                                    {(modelConfig.conf_threshold * 100).toFixed(0)}% Conf
+                                </span>
+                            </div>
+
+                            <div className="space-y-2 flex-1 overflow-y-auto pr-1 custom-scrollbar">
+                                {Object.entries(availableModels).map(([key, model]) => (
+                                    <button
+                                        key={key}
+                                        onClick={() => handleModelSwitch(key)}
+                                        className={`w-full text-left p-3 rounded-xl transition-all duration-200 border ${modelConfig.type === key
+                                                ? 'bg-blue-600/20 border-blue-500/50 text-white shadow-lg shadow-blue-900/20'
+                                                : 'bg-white/5 border-transparent text-gray-400 hover:bg-white/10 hover:text-gray-200'
+                                            }`}
+                                    >
+                                        <div className="flex justify-between items-center mb-1">
+                                            <span className="font-medium text-sm">{model.name}</span>
+                                            {modelConfig.type === key && <div className="w-1.5 h-1.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.8)]" />}
                                         </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    ) : (
-                        <div className="text-gray-500 flex flex-col items-center">
-                            <Smartphone size={48} className="mb-4 opacity-50" />
-                            <p>Waiting for camera stream...</p>
-                            {modelConfig && (
-                                <p className="text-xs mt-2">
-                                    Ready with {availableModels[modelConfig.type]?.name || modelConfig.type}
-                                </p>
-                            )}
+                                        <div className="text-[10px] opacity-60 line-clamp-2 leading-relaxed">
+                                            {model.description}
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     )}
+
+                    {/* Instructions (Collapsed/Minimal) */}
+                    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-5 shadow-xl">
+                        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Quick Tips</h3>
+                        <ul className="space-y-2 text-xs text-gray-400">
+                            <li className="flex gap-2">
+                                <span className="text-yellow-500 font-bold">1.</span>
+                                <span>Click "Visit Site" if ngrok warns you.</span>
+                            </li>
+                            <li className="flex gap-2">
+                                <span className="text-yellow-500 font-bold">2.</span>
+                                <span>Allow camera access on phone.</span>
+                            </li>
+                        </ul>
+                    </div>
                 </div>
+
+                {/* Main Content - Video Feed */}
+                <div className="flex-1 bg-black rounded-3xl overflow-hidden relative shadow-2xl border border-white/10 group">
+                    {viewerImage ? (
+                        <div className="relative w-full h-full flex items-center justify-center bg-[#050505]">
+                            <img src={viewerImage} alt="Live Stream" className="max-w-full max-h-full object-contain" />
+
+                            {/* Canvas overlay */}
+                            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                                <CanvasOverlay
+                                    image={viewerImage}
+                                    boxes={results?.boxes}
+                                    labels={results?.labels}
+                                    classNames={results?.class_names}
+                                    scores={results?.scores}
+                                    severities={results?.severities}
+                                    classColors={classColors}
+                                />
+                            </div>
+
+                            {/* Floating Stats Overlay */}
+                            <div className="absolute top-6 right-6 flex flex-col gap-2 items-end">
+                                <div className="bg-black/60 backdrop-blur-md text-white px-4 py-2 rounded-full border border-white/10 shadow-lg flex items-center gap-3 transition-opacity duration-300">
+                                    <div className="flex flex-col items-end">
+                                        <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">FPS</span>
+                                        <span className="text-sm font-bold font-mono text-green-400">{fps > 0 ? fps.toFixed(1) : '--'}</span>
+                                    </div>
+                                    <div className="w-px h-6 bg-white/20"></div>
+                                    <div className="flex flex-col items-end">
+                                        <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">Objects</span>
+                                        <span className="text-sm font-bold font-mono text-blue-400">{results?.boxes?.length || 0}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Model Badge */}
+                            <div className="absolute top-6 left-6">
+                                <div className="bg-black/60 backdrop-blur-md text-white px-4 py-2 rounded-full border border-white/10 shadow-lg flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
+                                    <span className="text-xs font-medium tracking-wide text-gray-200">LIVE</span>
+                                    <span className="text-xs text-gray-500">•</span>
+                                    <span className="text-xs font-medium text-gray-300">
+                                        {availableModels[modelConfig?.type]?.name || modelConfig?.type || 'Loading...'}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-600 bg-[#050505]">
+                            <div className="w-24 h-24 rounded-full bg-white/5 flex items-center justify-center mb-6 animate-pulse">
+                                <Smartphone size={48} className="opacity-40" />
+                            </div>
+                            <h3 className="text-xl font-medium text-gray-400 mb-2">Waiting for Connection</h3>
+                            <p className="text-sm text-gray-600 max-w-xs text-center">
+                                Scan the QR code on the left to start streaming from your device.
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
         );
@@ -722,14 +723,14 @@ export default function LiveCamera({ apiUrl }) {
                             <p className="mt-1 text-gray-400">This may take a few seconds</p>
                         </div>
                         <div className="mt-4 flex gap-2">
-                            <a 
-                                href="/test.html" 
+                            <a
+                                href="/test.html"
                                 className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
                             >
                                 🔧 Test Connection
                             </a>
-                            <button 
-                                onClick={() => window.location.reload()} 
+                            <button
+                                onClick={() => window.location.reload()}
                                 className="flex-1 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
                             >
                                 🔄 Refresh
@@ -738,7 +739,7 @@ export default function LiveCamera({ apiUrl }) {
                     </div>
                 </div>
             )}
-            
+
             <video
                 ref={videoRef}
                 autoPlay
@@ -761,7 +762,7 @@ export default function LiveCamera({ apiUrl }) {
                     )}
                 </div>
             </div>
-            
+
             <div className="absolute bottom-10 left-0 right-0 flex flex-col items-center gap-4">
                 <div className="bg-black/70 px-6 py-3 rounded-full backdrop-blur-sm border-2 border-white/20">
                     <p className="text-white font-medium">
@@ -803,7 +804,7 @@ function CanvasOverlay({ image, boxes, labels, classNames, scores, severities, c
                         const score = scores[i];
                         const severity = severities?.[i];
                         const color = classColors?.[label] || '#00ff00';
-                        
+
                         // Draw bounding box with class-specific color
                         ctx.strokeStyle = color;
                         ctx.lineWidth = 3;
@@ -816,17 +817,17 @@ function CanvasOverlay({ image, boxes, labels, classNames, scores, severities, c
                             const severityUpper = severity.toUpperCase();
                             text += ` [${severityUpper}]`;
                         }
-                        
+
                         ctx.font = 'bold 16px Arial';
                         const textMetrics = ctx.measureText(text);
                         const textHeight = 20;
                         const padding = 4;
-                        
+
                         ctx.fillStyle = color;
                         ctx.fillRect(
-                            x1, 
-                            y1 - textHeight - padding, 
-                            textMetrics.width + padding * 2, 
+                            x1,
+                            y1 - textHeight - padding,
+                            textMetrics.width + padding * 2,
                             textHeight + padding
                         );
 

@@ -41,58 +41,75 @@ function App() {
     };
 
     return (
-        <div className="min-h-screen bg-gray-900 text-white">
-            <header className="bg-gray-800 p-4 shadow-lg">
-                <div className="container mx-auto flex justify-between items-center">
-                    <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-                        Urban Issue Detection
-                    </h1>
-                    <div className="flex gap-4">
-                        <select
-                            className="bg-gray-700 rounded px-3 py-1"
-                            value={config.type}
-                            onChange={(e) => updateConfig({ type: e.target.value })}
+        <div className="min-h-screen bg-[#050505] text-white font-sans selection:bg-blue-500/30">
+            <header className="fixed top-0 left-0 right-0 z-50 bg-black/50 backdrop-blur-xl border-b border-white/5">
+                <div className="container mx-auto px-6 h-16 flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-gradient-to-tr from-blue-400 to-purple-500"></div>
+                        <h1 className="text-lg font-medium tracking-tight text-gray-200">
+                            Urban<span className="opacity-50">Sense</span>
+                        </h1>
+                    </div>
+
+                    <div className="flex gap-1 bg-white/5 p-1 rounded-full border border-white/5">
+                        <button
+                            onClick={() => setActiveTab('video')}
+                            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm transition-all duration-300 ${activeTab === 'video'
+                                ? 'bg-white/10 text-white shadow-sm'
+                                : 'text-gray-500 hover:text-gray-300'
+                                }`}
                         >
-                            <option value="rcnn">Faster R-CNN</option>
-                            <option value="fcos">FCOS</option>
-                            <option value="retinanet">RetinaNet</option>
-                        </select>
+                            <Video size={14} />
+                            <span>Video</span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('live')}
+                            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm transition-all duration-300 ${activeTab === 'live'
+                                ? 'bg-white/10 text-white shadow-sm'
+                                : 'text-gray-500 hover:text-gray-300'
+                                }`}
+                        >
+                            <Camera size={14} />
+                            <span>Live</span>
+                        </button>
+                    </div>
+
+                    <div className="w-24 flex justify-end">
+                        {/* Placeholder for future settings or profile */}
+                        <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center border border-white/5">
+                            <Settings size={14} className="text-gray-500" />
+                        </div>
                     </div>
                 </div>
             </header>
 
-            <main className="container mx-auto p-4">
-                <div className="flex gap-4 mb-6">
-                    <button
-                        onClick={() => setActiveTab('video')}
-                        className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-all ${activeTab === 'video'
-                            ? 'bg-blue-600 shadow-blue-500/30 shadow-lg'
-                            : 'bg-gray-800 hover:bg-gray-700'
-                            }`}
-                    >
-                        <Video size={20} />
-                        Video Inference
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('live')}
-                        className={`flex items-center gap-2 px-6 py-3 rounded-lg transition-all ${activeTab === 'live'
-                            ? 'bg-purple-600 shadow-purple-500/30 shadow-lg'
-                            : 'bg-gray-800 hover:bg-gray-700'
-                            }`}
-                    >
-                        <Camera size={20} />
-                        Live Camera
-                    </button>
-                </div>
-
-                <div className="bg-gray-800 rounded-xl p-6 shadow-xl border border-gray-700">
+            <main className="container mx-auto px-6 pt-24 pb-6 h-screen flex flex-col">
+                <div className="flex-1 relative">
                     {activeTab === 'video' ? (
-                        <VideoInference apiUrl={apiUrl} />
+                        <div className="bg-white/5 rounded-3xl border border-white/10 p-6 h-full overflow-y-auto custom-scrollbar">
+                            <VideoInference apiUrl={apiUrl} />
+                        </div>
                     ) : (
                         <LiveCamera apiUrl={apiUrl} />
                     )}
                 </div>
             </main>
+
+            <style>{`
+                .custom-scrollbar::-webkit-scrollbar {
+                    width: 6px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-track {
+                    background: transparent;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb {
+                    background-color: rgba(255, 255, 255, 0.1);
+                    border-radius: 20px;
+                }
+                .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                    background-color: rgba(255, 255, 255, 0.2);
+                }
+            `}</style>
         </div>
     );
 }
