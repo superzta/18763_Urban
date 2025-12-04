@@ -73,7 +73,12 @@ class PreModel(nn.Module):
 # --------------------
 # 2. Load model + kmeans
 # --------------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+if torch.cuda.is_available():
+    print(f"Using GPU: {torch.cuda.get_device_name(0)} for clustering")
+    device = torch.device("cuda")
+else:
+    print("Using CPU for clustering")
 
 model = PreModel().to(device)
 model.load_state_dict(torch.load("clustering_checkpoints/simclr_best_adam_damageroad.pth", map_location=device))

@@ -632,7 +632,7 @@ export default function LiveCamera({ apiUrl }) {
                         </div>
 
                         <div className="mt-4 bg-yellow-900/20 border border-yellow-600 p-3 rounded-lg text-left">
-                            <p className="text-xs text-yellow-300 font-bold mb-2">⚠️ IMPORTANT:</p>
+                            <p className="text-xs text-yellow-300 font-bold mb-2">IMPORTANT:</p>
                             <p className="text-xs text-gray-300 mb-1">
                                 1. On phone: Click <strong className="text-yellow-300">"Visit Site"</strong> when ngrok warning appears
                             </p>
@@ -669,6 +669,7 @@ export default function LiveCamera({ apiUrl }) {
                                 labels={results?.labels}
                                 classNames={results?.class_names}
                                 scores={results?.scores}
+                                severities={results?.severities}
                                 classColors={classColors}
                             />
                             
@@ -781,7 +782,7 @@ export default function LiveCamera({ apiUrl }) {
     );
 }
 
-function CanvasOverlay({ image, boxes, labels, classNames, scores, classColors }) {
+function CanvasOverlay({ image, boxes, labels, classNames, scores, severities, classColors }) {
     const canvasRef = useRef(null);
 
     useEffect(() => {
@@ -800,6 +801,7 @@ function CanvasOverlay({ image, boxes, labels, classNames, scores, classColors }
                         const label = labels[i];
                         const className = classNames?.[i] || `Class ${label}`;
                         const score = scores[i];
+                        const severity = severities?.[i];
                         const color = classColors?.[label] || '#00ff00';
                         
                         // Draw bounding box with class-specific color
@@ -807,8 +809,14 @@ function CanvasOverlay({ image, boxes, labels, classNames, scores, classColors }
                         ctx.lineWidth = 3;
                         ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-                        // Draw label background
-                        const text = `${className}: ${(score * 100).toFixed(0)}%`;
+                        // Draw label background with severity
+                        let text = `${className}: ${(score * 100).toFixed(0)}%`;
+                        if (severity) {
+                            // Add severity with color coding
+                            const severityUpper = severity.toUpperCase();
+                            text += ` [${severityUpper}]`;
+                        }
+                        
                         ctx.font = 'bold 16px Arial';
                         const textMetrics = ctx.measureText(text);
                         const textHeight = 20;
@@ -829,7 +837,7 @@ function CanvasOverlay({ image, boxes, labels, classNames, scores, classColors }
                 }
             };
         }
-    }, [image, boxes, labels, classNames, scores, classColors]);
+    }, [image, boxes, labels, classNames, scores, severities, classColors]);
 
     return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-contain" />;
 }

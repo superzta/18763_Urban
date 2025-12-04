@@ -9,6 +9,7 @@ import base64
 import json
 import logging
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from .model_wrapper import ModelWrapper
 from .video_processor import VideoProcessor
@@ -375,18 +376,19 @@ async def websocket_endpoint(websocket: WebSocket, role: str = "source"):
                 # Convert BGR to RGB
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 
-                # Inference
-                boxes, labels, scores = model.predict(frame_rgb)
+                # Inference (now includes severity classification)
+                boxes, labels, scores, severities = model.predict(frame_rgb)
                 
                 logger.info(f"Detected {len(boxes)} objects")
                 
-                # Prepare result with class names
+                # Prepare result with class names and severities
                 class_names_list = [CLASS_NAMES.get(label, f"Class {label}") for label in labels]
                 result = {
                     "boxes": boxes,
                     "labels": labels,
                     "class_names": class_names_list,
                     "scores": scores,
+                    "severities": severities,
                     "image": data # Echo back the image so viewer can display it
                 }
                 
@@ -445,8 +447,11 @@ async def receive_frame(request: Request):
     """HTTP fallback endpoint to receive frames from phone when WebSocket fails"""
     global latest_frame_result, is_processing
     
+    logger.info("[HTTP] Frame received from phone")
+    
     # Skip if already processing a frame (drop frame for real-time performance)
     if is_processing:
+        logger.warning("[HTTP] Frame dropped - still processing previous frame")
         return {"status": "busy", "message": "Processing previous frame"}
     
     is_processing = True
@@ -457,6 +462,7 @@ async def receive_frame(request: Request):
         image_data = data.get("image")
         
         if not image_data:
+            logger.error("[HTTP] No image data in request")
             return {"error": "No image data"}
         
         # Load model (cached after first load)
@@ -484,21 +490,26 @@ async def receive_frame(request: Request):
         # Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Inference (optimized with torch.no_grad already in model)
-        boxes, labels, scores = model.predict(frame_rgb)
+        # Inference (optimized with torch.no_grad already in model, now includes severity)
+        boxes, labels, scores, severities = model.predict(frame_rgb)
         
-        # Store result with class names
+        logger.info(f"[HTTP] Detected {len(boxes)} objects")
+        
+        # Store result with class names and severities
         class_names_list = [CLASS_NAMES.get(label, f"Class {label}") for label in labels]
         latest_frame_result = {
             "boxes": boxes,
             "labels": labels,
             "class_names": class_names_list,
             "scores": scores,
-            "image": image_data
+            "severities": severities,
+            "image": image_data,
+            "timestamp": datetime.now().isoformat()
         }
         
         # Broadcast to WebSocket viewers (Bridge HTTP source -> WebSocket viewers)
         await manager.broadcast(latest_frame_result)
+        logger.info(f"[HTTP] Frame broadcasted to {len(manager.active_connections)} viewers")
         
         return {"status": "ok", "detections": len(boxes)}
         

@@ -12,6 +12,7 @@ from rcnn import Config, get_model as get_rcnn_model
 from fcos import get_model as get_fcos_model
 from retinanet import get_model as get_retinanet_model
 from torchvision.transforms import functional as F
+from .severity_classifier import SeverityClassifier
 
 class ModelWrapper:
     def __init__(self, model_type='rcnn', checkpoint_path=None, classes=[3], conf_threshold=0.5, device=None):
@@ -62,20 +63,29 @@ class ModelWrapper:
         else:
             print("Using CPU for inference")
         
+        # Initialize severity classifier
+        checkpoint_base = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../clustering/clustering_checkpoints'))
+        self.severity_classifier = SeverityClassifier(checkpoint_base_dir=checkpoint_base, device=self.device)
+        print(f"[ModelWrapper] Severity classifier initialized")
+        
     def predict(self, image):
         """
-        Run inference on a single image.
+        Run inference on a single image with severity classification.
         Args:
             image: PIL Image or numpy array (RGB)
         Returns:
             boxes (list): List of [x1, y1, x2, y2]
             labels (list): List of class indices
             scores (list): List of confidence scores
+            severities (list): List of severity levels ('weak', 'moderate', 'heavy', or None)
         """
         if isinstance(image, np.ndarray):
             image = Image.fromarray(image)
             
-        # Transform image
+        # Keep original image for cropping
+        original_image = image.copy()
+        
+        # Transform image for detection
         img_tensor = F.to_tensor(image).to(self.device)
         
         # Use inference mode for better performance (PyTorch 1.9+)
@@ -104,4 +114,32 @@ class ModelWrapper:
                 # Fallback: keep original if mapping not found
                 labels_global.append(model_idx)
         
-        return boxes.tolist(), labels_global, scores.tolist()
+        # Classify severity for each detected box
+        severities = []
+        for box, class_id in zip(boxes, labels_global):
+            try:
+                # Crop the detected region
+                x1, y1, x2, y2 = map(int, box)
+                # Ensure box is within image bounds
+                x1 = max(0, x1)
+                y1 = max(0, y1)
+                x2 = min(original_image.width, x2)
+                y2 = min(original_image.height, y2)
+                
+                # Skip if box is invalid
+                if x2 <= x1 or y2 <= y1:
+                    severities.append(None)
+                    continue
+                
+                # Crop the image
+                cropped = original_image.crop((x1, y1, x2, y2))
+                
+                # Predict severity
+                severity = self.severity_classifier.predict_severity(cropped, class_id)
+                severities.append(severity)
+                
+            except Exception as e:
+                print(f"[ModelWrapper] Error classifying severity for box: {e}")
+                severities.append(None)
+        
+        return boxes.tolist(), labels_global, scores.tolist(), severities
