@@ -20,6 +20,11 @@ class ModelWrapper:
         self.config.conf_threshold = conf_threshold
         self.model_type = model_type
         
+        # Create inverse mapping: model output idx -> global class ID
+        # Training uses: global_to_model_idx = {global_cls: i+1 for i, global_cls in enumerate(classes)}
+        # So for classes=[0,1,3]: model outputs 1→class 0, 2→class 1, 3→class 3
+        self.model_idx_to_global = {i+1: global_cls for i, global_cls in enumerate(classes)}
+        
         print(f"Loading {model_type} model from {checkpoint_path}...")
         
         if model_type == 'rcnn':
@@ -44,6 +49,19 @@ class ModelWrapper:
         self.model.to(self.device)
         self.model.eval()
         
+        # Optimize for inference
+        if self.device.type == 'cuda':
+            device_index = self.device.index if self.device.index is not None else torch.cuda.current_device()
+            gpu_name = torch.cuda.get_device_name(device_index)
+            print(f"Using GPU: {gpu_name} (Device Index: {device_index})")
+            # Enable cuDNN autotuner for faster convolutions
+            torch.backends.cudnn.benchmark = True
+            # Use TensorFloat32 on Ampere GPUs for faster matmul
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        else:
+            print("Using CPU for inference")
+        
     def predict(self, image):
         """
         Run inference on a single image.
@@ -60,15 +78,30 @@ class ModelWrapper:
         # Transform image
         img_tensor = F.to_tensor(image).to(self.device)
         
-        with torch.no_grad():
+        # Use inference mode for better performance (PyTorch 1.9+)
+        with torch.inference_mode():
             predictions = self.model([img_tensor])
             
         pred = predictions[0]
         
-        # Filter by confidence
+        # Filter by confidence (vectorized operation)
         mask = pred['scores'] > self.config.conf_threshold
-        boxes = pred['boxes'][mask].cpu().numpy().tolist()
-        labels = pred['labels'][mask].cpu().numpy().tolist()
-        scores = pred['scores'][mask].cpu().numpy().tolist()
         
-        return boxes, labels, scores
+        # Move to CPU and convert to numpy
+        boxes = pred['boxes'][mask].cpu().numpy()
+        labels_model = pred['labels'][mask].cpu().numpy()
+        scores = pred['scores'][mask].cpu().numpy()
+        
+        # Remap labels from model output indices (1,2,3...) to global class IDs (0,1,3)
+        # The model was trained with: global_to_model_idx = {0:1, 1:2, 3:3}
+        # So model outputs 1,2,3 which we need to map back to 0,1,3
+        labels_global = []
+        for model_idx in labels_model:
+            model_idx = int(model_idx)
+            if model_idx in self.model_idx_to_global:
+                labels_global.append(self.model_idx_to_global[model_idx])
+            else:
+                # Fallback: keep original if mapping not found
+                labels_global.append(model_idx)
+        
+        return boxes.tolist(), labels_global, scores.tolist()

@@ -32,17 +32,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Middleware to log all requests for debugging
+# Middleware to log requests (minimal logging for performance)
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    # Skip logging for high-frequency endpoints to reduce overhead
+    if request.url.path in ["/api/frame", "/api/latest"]:
+        return await call_next(request)
+    
+    # Log all other requests
     import time
     start_time = time.time()
     print(f"[MIDDLEWARE] {request.method} {request.url.path}")
-    
-    # Log headers for debugging
-    if request.url.path == "/api/frame":
-        print(f"[MIDDLEWARE] Content-Type: {request.headers.get('content-type')}")
-        print(f"[MIDDLEWARE] Content-Length: {request.headers.get('content-length', 'unknown')}")
     
     try:
         response = await call_next(request)
@@ -52,6 +52,8 @@ async def log_requests(request: Request, call_next):
     except Exception as e:
         duration = time.time() - start_time
         print(f"[MIDDLEWARE] ERROR after {duration:.2f}s: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
 # Startup event to initialize tunnels and load model
@@ -93,6 +95,20 @@ current_model_config = {
     "checkpoint": "checkpoints/best_model_rcnn_v2.pth",
     "classes": [0, 1, 3],
     "conf_threshold": 0.5
+}
+
+# Class names mapping
+CLASS_NAMES = {
+    0: 'Damaged Road',
+    1: 'Pothole',
+    2: 'Illegal Parking',
+    3: 'Broken Sign',
+    4: 'Fallen Tree',
+    5: 'Garbage',
+    6: 'Vandalism',
+    7: 'Dead Animal',
+    8: 'Damaged Concrete',
+    9: 'Damaged Wires'
 }
 
 # Available models for switching
@@ -222,31 +238,42 @@ async def update_config(config: dict):
     """Update model configuration and reload model"""
     global current_model_config
     
-    old_config = current_model_config.copy()
-    
-    # If switching model type, update checkpoint path automatically
-    if "type" in config and config["type"] in AVAILABLE_MODELS:
-        config["checkpoint"] = AVAILABLE_MODELS[config["type"]]["checkpoint"]
-    
-    current_model_config.update(config)
-    
-    # Clear model cache if model type or checkpoint changed
-    if (old_config.get("type") != current_model_config.get("type") or 
-        old_config.get("checkpoint") != current_model_config.get("checkpoint")):
-        clear_model_cache()
-        logger.info(f"[MODEL] Switched from {old_config.get('type')} to {current_model_config.get('type')}")
-    
-    # Broadcast model change to all WebSocket viewers
-    await manager.broadcast({
-        "type": "model_changed",
-        "config": current_model_config
-    })
-    
-    return {
-        "status": "updated",
-        "config": current_model_config,
-        "message": f"Model switched to {current_model_config['type']}"
-    }
+    try:
+        logger.info(f"[CONFIG] Received model switch request: {config}")
+        
+        old_config = current_model_config.copy()
+        
+        # If switching model type, update checkpoint path automatically
+        if "type" in config and config["type"] in AVAILABLE_MODELS:
+            config["checkpoint"] = AVAILABLE_MODELS[config["type"]]["checkpoint"]
+            logger.info(f"[CONFIG] Switching from {old_config.get('type')} to {config['type']}")
+        
+        current_model_config.update(config)
+        
+        # Clear model cache if model type or checkpoint changed
+        if (old_config.get("type") != current_model_config.get("type") or 
+            old_config.get("checkpoint") != current_model_config.get("checkpoint")):
+            clear_model_cache()
+            logger.info(f"[MODEL] Model cache cleared, will reload on next inference")
+        
+        # Broadcast model change to all WebSocket viewers
+        try:
+            await manager.broadcast({
+                "type": "model_changed",
+                "config": current_model_config
+            })
+            logger.info(f"[CONFIG] Broadcasted model change to {len(manager.viewers)} viewers")
+        except Exception as e:
+            logger.error(f"[CONFIG] Failed to broadcast: {e}")
+        
+        return {
+            "status": "updated",
+            "config": current_model_config,
+            "message": f"Model switched to {current_model_config['type']}"
+        }
+    except Exception as e:
+        logger.error(f"[CONFIG] Error updating config: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/predict_video")
 async def predict_video(file: UploadFile = File(...)):
@@ -353,10 +380,12 @@ async def websocket_endpoint(websocket: WebSocket, role: str = "source"):
                 
                 logger.info(f"Detected {len(boxes)} objects")
                 
-                # Prepare result
+                # Prepare result with class names
+                class_names_list = [CLASS_NAMES.get(label, f"Class {label}") for label in labels]
                 result = {
                     "boxes": boxes,
                     "labels": labels,
+                    "class_names": class_names_list,
                     "scores": scores,
                     "image": data # Echo back the image so viewer can display it
                 }
@@ -416,71 +445,54 @@ async def receive_frame(request: Request):
     """HTTP fallback endpoint to receive frames from phone when WebSocket fails"""
     global latest_frame_result, is_processing
     
-    print("=" * 80)
-    print("[HTTP] FRAME REQUEST RECEIVED - ENDPOINT HIT!")
-    print("=" * 80)
-    logger.info("[HTTP] Frame request received")
-    
-    # Skip if already processing a frame (real-time: only process latest)
+    # Skip if already processing a frame (drop frame for real-time performance)
     if is_processing:
-        logger.info("[HTTP] Skipping - busy processing previous frame")
         return {"status": "busy", "message": "Processing previous frame"}
     
     is_processing = True
-    logger.info("[HTTP]  Processing lock acquired")
     
     try:
-        logger.info("[HTTP]  Parsing JSON...")
+        # Parse JSON
         data = await request.json()
         image_data = data.get("image")
         
         if not image_data:
-            logger.warning("[HTTP]  No image data in request")
             return {"error": "No image data"}
         
-        logger.info(f"[HTTP]   Image data received (length: {len(image_data)} chars)")
-        
-        # Load model
-        logger.info("[HTTP]  Loading model...")
+        # Load model (cached after first load)
         model = get_model()
-        logger.info("[HTTP]  Model loaded")
         
         # Process the base64 image
         if image_data.startswith('data:image'):
             if ',' in image_data:
                 header, encoded = image_data.split(',', 1)
             else:
-                logger.error("[HTTP]  Invalid data URL format (no comma)")
                 return {"error": "Invalid data URL format"}
         else:
             encoded = image_data
         
-        logger.info("[HTTP]  Decoding base64...")
         # Decode base64
         image_bytes = base64.b64decode(encoded)
         nparr = np.frombuffer(image_bytes, np.uint8)
         
-        logger.info(f"[HTTP]  Decoding image (bytes: {len(image_bytes)})...")
+        # Decode image
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
         if frame is None:
-            logger.error("[HTTP]  Failed to decode image - frame is None")
             return {"error": "Failed to decode image"}
-        
-        logger.info(f"[HTTP] Frame decoded: {frame.shape}")
         
         # Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Inference
-        logger.info("[HTTP] Running inference...")
+        # Inference (optimized with torch.no_grad already in model)
         boxes, labels, scores = model.predict(frame_rgb)
-        logger.info(f"[HTTP] Inference complete: {len(boxes)} detections")
         
-        # Store result
+        # Store result with class names
+        class_names_list = [CLASS_NAMES.get(label, f"Class {label}") for label in labels]
         latest_frame_result = {
             "boxes": boxes,
             "labels": labels,
+            "class_names": class_names_list,
             "scores": scores,
             "image": image_data
         }
@@ -488,16 +500,13 @@ async def receive_frame(request: Request):
         # Broadcast to WebSocket viewers (Bridge HTTP source -> WebSocket viewers)
         await manager.broadcast(latest_frame_result)
         
-        logger.info(f"[HTTP]  Frame processed [{frame.shape[1]}x{frame.shape[0]}] - {len(boxes)} detections")
-        
         return {"status": "ok", "detections": len(boxes)}
         
     except Exception as e:
-        logger.error(f"[HTTP]  Error processing frame: {e}", exc_info=True)
+        logger.error(f"[HTTP] Error: {e}")
         return {"error": str(e)}
     finally:
         is_processing = False
-        logger.info("[HTTP]  Processing lock released")
 
 @app.get("/api/latest")
 async def get_latest_frame():

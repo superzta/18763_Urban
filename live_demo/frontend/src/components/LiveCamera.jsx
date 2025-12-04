@@ -15,6 +15,33 @@ export default function LiveCamera({ apiUrl }) {
     const [useHttpFallback, setUseHttpFallback] = useState(false);
     const [modelConfig, setModelConfig] = useState(null);
     const [availableModels, setAvailableModels] = useState({});
+    const [fps, setFps] = useState(0);
+    const fpsCounterRef = useRef({ lastTime: Date.now(), frameCount: 0 });
+    const lastFrameDisplayTimeRef = useRef(Date.now());
+    const [classNames] = useState({
+        0: 'Damaged Road',
+        1: 'Pothole',
+        2: 'Illegal Parking',
+        3: 'Broken Sign',
+        4: 'Fallen Tree',
+        5: 'Garbage',
+        6: 'Vandalism',
+        7: 'Dead Animal',
+        8: 'Damaged Concrete',
+        9: 'Damaged Wires'
+    });
+    const [classColors] = useState([
+        '#FF6B6B', // Red - Damaged Road
+        '#FFA500', // Orange - Pothole
+        '#FFD700', // Gold - Illegal Parking
+        '#4ECDC4', // Teal - Broken Sign
+        '#95E1D3', // Mint - Fallen Tree
+        '#F38181', // Pink - Garbage
+        '#AA96DA', // Purple - Vandalism
+        '#FF8B94', // Light Red - Dead Animal
+        '#C7CEEA', // Light Purple - Damaged Concrete
+        '#FECA57'  // Yellow - Damaged Wires
+    ]);
 
     // Fetch model config on mount
     useEffect(() => {
@@ -136,10 +163,17 @@ export default function LiveCamera({ apiUrl }) {
         }
 
         if (mode === 'client') {
-            // Phone: Always use HTTP mode (more reliable through ngrok)
-            console.log('[Phone] Using HTTP mode (bypassing WebSocket for ngrok compatibility)');
+            // Phone: Skip health check, just connect (ngrok blocks initial requests)
+            console.log('[Phone] ===== PHONE MODE DETECTED =====');
+            console.log('[Phone] Origin:', window.location.origin);
+            console.log('[Phone] Hostname:', window.location.hostname);
+            console.log('[Phone] Setting up HTTP mode directly (bypassing health check)...');
+            
+            // Set connection immediately - ngrok blocking is causing issues
             setUseHttpFallback(true);
             setIsConnected(true);
+            console.log('[Phone] ✓ Connection mode set: useHttpFallback=true, isConnected=true');
+            
             return;
         }
 
@@ -188,6 +222,7 @@ export default function LiveCamera({ apiUrl }) {
             // Handle normal frame data
             setResults(data);
             setViewerImage(data.image);
+            updateFps();
         };
 
         socket.onerror = (error) => {
@@ -212,29 +247,20 @@ export default function LiveCamera({ apiUrl }) {
 
     // Camera streaming logic (Client only)
     useEffect(() => {
-        let interval;
+        let animationFrameId;
         let streamStarted = false;
         let isProcessing = false; // Throttle flag to prevent concurrent requests
+        let frameCount = 0; // For frame counting
+        let lastSendTime = 0; // Track when we last sent a frame
 
         const startStreaming = async () => {
-            console.log('[LiveCamera] startStreaming called - mode:', mode, 'isConnected:', isConnected, 'useHttpFallback:', useHttpFallback);
+            console.log('[LiveCamera] startStreaming called');
+            console.log('[LiveCamera] mode:', mode);
+            console.log('[LiveCamera] isConnected:', isConnected);
+            console.log('[LiveCamera] useHttpFallback:', useHttpFallback);
+            console.log('[LiveCamera] videoRef.current:', videoRef.current ? 'exists' : 'null');
             
-            // Test backend connectivity before starting stream
-            if (mode === 'client' && !streamStarted) {
-                console.log('[Phone] Testing backend connectivity...');
-                try {
-                    const healthCheck = await fetch(`${window.location.origin}/api/health`, {
-                        method: 'GET',
-                        headers: { 'Accept': 'application/json' }
-                    });
-                    const healthData = await healthCheck.json();
-                    console.log('[Phone] ✓ Backend is reachable:', healthData);
-                } catch (e) {
-                    console.error('[Phone] ✗ Cannot reach backend:', e);
-                    console.error('[Phone] Make sure you clicked "Visit Site" on the ngrok warning page!');
-                    // Don't return - still try to connect
-                }
-            }
+            // Skip health check - just start streaming (ngrok causes issues with initial requests)
             
             if (mode === 'client' && isConnected && videoRef.current) {
                 try {
@@ -242,8 +268,8 @@ export default function LiveCamera({ apiUrl }) {
                     const stream = await navigator.mediaDevices.getUserMedia({
                         video: { 
                             facingMode: 'environment',
-                            width: { ideal: 640 }, // Reduce resolution to ensure reliability
-                            height: { ideal: 480 }
+                            width: { ideal: 320 }, // Smaller = faster transmission & inference
+                            height: { ideal: 240 }
                         }
                     });
                     
@@ -252,24 +278,35 @@ export default function LiveCamera({ apiUrl }) {
                     
                     // Wait for video to be ready
                     videoRef.current.onloadedmetadata = () => {
-                        console.log('[Phone] Video metadata loaded, starting frame capture...');
+                        console.log('[Phone] ===== Video metadata loaded =====');
+                        console.log('[Phone] Video dimensions:', videoRef.current.videoWidth, 'x', videoRef.current.videoHeight);
+                        console.log('[Phone] Starting adaptive frame capture...');
                         videoRef.current.play();
                         
-                        // Start sending frames after video is ready
-                        setTimeout(() => {
-                            interval = setInterval(async () => {
-                                // Skip if still processing previous frame
-                                if (isProcessing) {
-                                    console.log('[Phone] Skipping frame - still processing previous one');
-                                    return;
-                                }
-                                
-                                if (videoRef.current && canvasRef.current) {
+                        // Adaptive frame sending - send next frame only after processing completes
+                        const captureAndSendFrame = async () => {
+                            const now = Date.now();
+                            
+                            // Minimum interval between frames (avoid overwhelming backend)
+                            const minInterval = 300; // 300ms = ~3 FPS max
+                            if (now - lastSendTime < minInterval) {
+                                animationFrameId = requestAnimationFrame(captureAndSendFrame);
+                                return;
+                            }
+                            
+                            // Skip if still processing previous frame
+                            if (isProcessing) {
+                                animationFrameId = requestAnimationFrame(captureAndSendFrame);
+                                return;
+                            }
+                            
+                            if (videoRef.current && canvasRef.current) {
                                     const video = videoRef.current;
                                     
                                     // Check if video has valid dimensions
                                     if (video.videoWidth === 0 || video.videoHeight === 0) {
                                         console.warn('[Phone] Video not ready yet, skipping frame');
+                                        animationFrameId = requestAnimationFrame(captureAndSendFrame);
                                         return;
                                     }
                                     
@@ -281,19 +318,27 @@ export default function LiveCamera({ apiUrl }) {
                                         canvasRef.current.height = video.videoHeight;
                                         context.drawImage(video, 0, 0);
 
-                                        const base64 = canvasRef.current.toDataURL('image/jpeg', 0.5); // High compression to keep payload small
+                                        const base64 = canvasRef.current.toDataURL('image/jpeg', 0.3); // Aggressive compression for speed
                                         
+                                        frameCount++;
                                         const isFirstFrame = !streamStarted;
                                         if (isFirstFrame) {
                                             console.log('[Phone] First frame sent, dimensions:', video.videoWidth, 'x', video.videoHeight);
-                                            console.log('[Phone] Using', useHttpFallback ? 'HTTP fallback' : 'WebSocket');
+                                            console.log('[Phone] Using HTTP mode with adaptive frame rate');
                                             streamStarted = true;
                                         }
+                                        
+                                        lastSendTime = now;
                                         
                                     if (useHttpFallback) {
                                         // HTTP fallback: POST to backend with TIMEOUT
                                         const sendTime = Date.now();
-                                        console.log('[Phone] Sending frame via HTTP...');
+                                        
+                                        if (isFirstFrame) {
+                                            console.log('[Phone] ===== SENDING FIRST FRAME =====');
+                                            console.log('[Phone] Target URL:', `${window.location.origin}/api/frame`);
+                                        }
+                                        
                                         try {
                                             // Create abort controller for timeout
                                             const controller = new AbortController();
@@ -309,31 +354,44 @@ export default function LiveCamera({ apiUrl }) {
                                             clearTimeout(timeoutId);
                                             const result = await response.json();
                                             const elapsed = Date.now() - sendTime;
-                                            console.log(`[Phone] HTTP response in ${elapsed}ms:`, result);
+                                            
+                                            if (isFirstFrame || frameCount % 10 === 0) {
+                                                console.log(`[Phone] Inference time: ${elapsed}ms`);
+                                            }
                                             
                                             if (result.status === 'busy') {
-                                                console.warn('[Phone] Backend busy, will retry next interval');
+                                                // Backend busy, slow down
+                                                console.warn('[Phone] Backend busy');
                                             } else if (result.error) {
                                                 console.error('[Phone] Backend error:', result.error);
                                             }
                                         } catch (e) {
                                             const elapsed = Date.now() - sendTime;
                                             if (e.name === 'AbortError') {
-                                                console.error(`[Phone] HTTP timeout after ${elapsed}ms - server too slow`);
+                                                console.error(`[Phone] HTTP timeout after ${elapsed}ms`);
                                             } else {
-                                                console.error(`[Phone] HTTP POST failed after ${elapsed}ms:`, e);
+                                                console.error(`[Phone] HTTP POST failed:`, e);
                                             }
                                         }
                                         } else if (ws && ws.readyState === WebSocket.OPEN) {
                                             // WebSocket
                                             ws.send(base64);
                                         }
+                                    } catch (captureError) {
+                                        console.error('[Phone] Frame capture error:', captureError);
                                     } finally {
-                                        isProcessing = false; // Release lock
+                                        isProcessing = false; // Release lock - ready for next frame
                                     }
                                 }
-                            }, 500); // Reduced to 2 FPS for better inference performance
-                        }, 500); // Wait 500ms for video to stabilize
+                            
+                            // Schedule next frame
+                            animationFrameId = requestAnimationFrame(captureAndSendFrame);
+                        };
+                        
+                        // Start adaptive frame capture after video stabilizes
+                        setTimeout(() => {
+                            captureAndSendFrame();
+                        }, 500);
                     };
 
                 } catch (err) {
@@ -346,7 +404,7 @@ export default function LiveCamera({ apiUrl }) {
         startStreaming();
 
         return () => {
-            if (interval) clearInterval(interval);
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
             if (videoRef.current && videoRef.current.srcObject) {
                 videoRef.current.srcObject.getTracks().forEach(track => track.stop());
             }
@@ -378,11 +436,12 @@ export default function LiveCamera({ apiUrl }) {
                         if (data.image) {
                             setResults(data);
                             setViewerImage(data.image);
+                            updateFps();
                         }
                     } catch (e) {
                         console.error('[Viewer] HTTP poll error:', e);
                     }
-            }, 1000); // Poll every 1s (slower than WS)
+                }, 200); // Poll every 200ms for faster updates (5 FPS max)
         };
 
         // If not connected via WebSocket, poll immediately
@@ -423,24 +482,58 @@ export default function LiveCamera({ apiUrl }) {
         );
     }
 
+    const updateFps = () => {
+        const now = Date.now();
+        
+        // Calculate instant FPS based on time since last frame
+        const timeSinceLastFrame = now - lastFrameDisplayTimeRef.current;
+        const instantFps = timeSinceLastFrame > 0 ? 1000 / timeSinceLastFrame : 0;
+        
+        // Update counter for averaged FPS
+        fpsCounterRef.current.frameCount++;
+        const elapsed = now - fpsCounterRef.current.lastTime;
+        
+        if (elapsed >= 1000) { // Update display every second
+            const avgFps = (fpsCounterRef.current.frameCount / elapsed) * 1000;
+            setFps(avgFps);
+            fpsCounterRef.current.frameCount = 0;
+            fpsCounterRef.current.lastTime = now;
+        }
+        
+        // Record this frame display time
+        lastFrameDisplayTimeRef.current = now;
+    };
+
     const handleModelSwitch = async (modelType) => {
         try {
+            console.log('[Viewer] ===== Model Switch Requested =====');
             console.log('[Viewer] Switching to model:', modelType);
+            console.log('[Viewer] Current origin:', window.location.origin);
+            console.log('[Viewer] Request body:', JSON.stringify({ type: modelType }));
+            
             const response = await fetch(`${window.location.origin}/api/config`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
                 body: JSON.stringify({ type: modelType })
             });
             
+            console.log('[Viewer] Response received');
+            console.log('[Viewer] Response status:', response.status);
+            console.log('[Viewer] Response headers:', [...response.headers.entries()]);
+            
             if (response.ok) {
                 const data = await response.json();
-                console.log('[Viewer] Model switched:', data);
+                console.log('[Viewer] ✓ Model switched successfully:', data);
                 setModelConfig(data.config);
             } else {
-                console.error('[Viewer] Failed to switch model:', response.status);
+                const errorText = await response.text();
+                console.error('[Viewer] ✗ Failed to switch model:', response.status, errorText);
             }
         } catch (error) {
-            console.error('[Viewer] Error switching model:', error);
+            console.error('[Viewer] ✗ Error switching model:', error);
         }
     };
 
@@ -570,12 +663,22 @@ export default function LiveCamera({ apiUrl }) {
                         <div className="relative w-full h-full">
                             <img src={viewerImage} alt="Live Stream" className="w-full h-full object-contain" />
                             {/* Canvas overlay for better alignment */}
-                            <CanvasOverlay image={viewerImage} boxes={results?.boxes} labels={results?.labels} scores={results?.scores} />
+                            <CanvasOverlay 
+                                image={viewerImage} 
+                                boxes={results?.boxes} 
+                                labels={results?.labels}
+                                classNames={results?.class_names}
+                                scores={results?.scores}
+                                classColors={classColors}
+                            />
                             
                             {/* Detection Stats Overlay */}
                             {results && (
                                 <div className="absolute top-4 right-4 bg-black/80 text-white px-4 py-2 rounded-lg text-sm backdrop-blur-sm">
                                     <div className="font-bold text-green-400">{results.boxes?.length || 0} Detections</div>
+                                    <div className="text-xs text-blue-300 mt-1">
+                                        {fps > 0 ? `${fps.toFixed(1)} FPS` : 'Calculating...'}
+                                    </div>
                                     {modelConfig && (
                                         <div className="text-xs text-gray-300 mt-1">
                                             {availableModels[modelConfig.type]?.name || modelConfig.type}
@@ -606,23 +709,31 @@ export default function LiveCamera({ apiUrl }) {
             {!isConnected && mode === 'client' && (
                 <div className="absolute inset-0 bg-black/90 z-50 flex items-center justify-center p-8">
                     <div className="bg-yellow-900/30 border-2 border-yellow-500 rounded-xl p-6 max-w-md text-center">
-                        <div className="text-6xl mb-4"></div>
-                        <h2 className="text-2xl font-bold text-yellow-300 mb-4">Connection Required</h2>
+                        <div className="text-6xl mb-4 animate-pulse">📡</div>
+                        <h2 className="text-2xl font-bold text-yellow-300 mb-4">Connecting...</h2>
                         <div className="text-left text-white space-y-3 text-sm mb-4">
-                            <p><strong>Step 1:</strong> If you see an ngrok warning page, click <strong>"Visit Site"</strong></p>
-                            <p><strong>Step 2:</strong> Allow camera permissions when prompted</p>
-                            <p><strong>Step 3:</strong> Wait for "Streaming to Laptop..." message</p>
+                            <p><strong>Step 1:</strong> If you see an ngrok warning, click <strong>"Visit Site"</strong></p>
+                            <p><strong>Step 2:</strong> Allow camera when prompted</p>
+                            <p><strong>Step 3:</strong> Wait for green checkmark</p>
                         </div>
                         <div className="text-xs text-gray-300 bg-black/50 p-3 rounded mt-4">
-                            <p>Status: {useHttpFallback ? 'HTTP Mode Active' : 'Connecting...'}</p>
-                            <p className="mt-1">If stuck, refresh this page</p>
+                            <p className="animate-pulse">⏳ Establishing connection to backend...</p>
+                            <p className="mt-1 text-gray-400">This may take a few seconds</p>
                         </div>
-                        <a 
-                            href="/test.html" 
-                            className="mt-4 inline-block bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
-                        >
-                            Run Connection Test
-                        </a>
+                        <div className="mt-4 flex gap-2">
+                            <a 
+                                href="/test.html" 
+                                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                            >
+                                🔧 Test Connection
+                            </a>
+                            <button 
+                                onClick={() => window.location.reload()} 
+                                className="flex-1 bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                            >
+                                🔄 Refresh
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -639,25 +750,30 @@ export default function LiveCamera({ apiUrl }) {
                 className="hidden"
             />
 
+            <div className="absolute top-4 left-4 right-4">
+                <div className="bg-black/80 text-white px-3 py-2 rounded-lg text-xs backdrop-blur-sm inline-block">
+                    <div className="font-bold text-green-400">📹 Active</div>
+                    {modelConfig && (
+                        <div className="text-gray-300 mt-1">
+                            {availableModels[modelConfig.type]?.name || modelConfig.type}
+                        </div>
+                    )}
+                </div>
+            </div>
+            
             <div className="absolute bottom-10 left-0 right-0 flex flex-col items-center gap-4">
                 <div className="bg-black/70 px-6 py-3 rounded-full backdrop-blur-sm border-2 border-white/20">
                     <p className="text-white font-medium">
                         {isConnected ? '✓ Streaming to Laptop...' : 'Connecting...'}
                     </p>
                     {useHttpFallback && isConnected && (
-                        <p className="text-xs text-yellow-300 mt-1">HTTP Mode</p>
-                    )}
-                    {modelConfig && (
-                        <p className="text-xs text-blue-300 mt-1">
-                            <Cpu size={12} className="inline mr-1" />
-                            Model: {availableModels[modelConfig.type]?.name || modelConfig.type}
-                        </p>
+                        <p className="text-xs text-yellow-300 mt-1">Adaptive Frame Rate</p>
                     )}
                 </div>
                 <div className="flex items-center gap-2">
                     <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-yellow-500 animate-pulse'}`} />
                     <span className="text-xs text-white bg-black/50 px-2 py-1 rounded">
-                        {isConnected ? (useHttpFallback ? 'HTTP' : 'WebSocket') : 'Waiting...'}
+                        {isConnected ? 'Adaptive HTTP' : 'Waiting...'}
                     </span>
                 </div>
             </div>
@@ -665,7 +781,7 @@ export default function LiveCamera({ apiUrl }) {
     );
 }
 
-function CanvasOverlay({ image, boxes, labels, scores }) {
+function CanvasOverlay({ image, boxes, labels, classNames, scores, classColors }) {
     const canvasRef = useRef(null);
 
     useEffect(() => {
@@ -678,21 +794,42 @@ function CanvasOverlay({ image, boxes, labels, scores }) {
                 canvasRef.current.height = img.height;
                 ctx.drawImage(img, 0, 0);
 
-                if (boxes) {
+                if (boxes && boxes.length > 0) {
                     boxes.forEach((box, i) => {
                         const [x1, y1, x2, y2] = box;
-                        ctx.strokeStyle = '#00ff00';
-                        ctx.lineWidth = 4;
+                        const label = labels[i];
+                        const className = classNames?.[i] || `Class ${label}`;
+                        const score = scores[i];
+                        const color = classColors?.[label] || '#00ff00';
+                        
+                        // Draw bounding box with class-specific color
+                        ctx.strokeStyle = color;
+                        ctx.lineWidth = 3;
                         ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-                        ctx.fillStyle = '#00ff00';
-                        ctx.font = '24px Arial';
-                        ctx.fillText(`${labels[i]}: ${scores[i].toFixed(2)}`, x1, y1 - 10);
+                        // Draw label background
+                        const text = `${className}: ${(score * 100).toFixed(0)}%`;
+                        ctx.font = 'bold 16px Arial';
+                        const textMetrics = ctx.measureText(text);
+                        const textHeight = 20;
+                        const padding = 4;
+                        
+                        ctx.fillStyle = color;
+                        ctx.fillRect(
+                            x1, 
+                            y1 - textHeight - padding, 
+                            textMetrics.width + padding * 2, 
+                            textHeight + padding
+                        );
+
+                        // Draw label text
+                        ctx.fillStyle = '#000000';
+                        ctx.fillText(text, x1 + padding, y1 - padding);
                     });
                 }
             };
         }
-    }, [image, boxes, labels, scores]);
+    }, [image, boxes, labels, classNames, scores, classColors]);
 
     return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-contain" />;
 }
