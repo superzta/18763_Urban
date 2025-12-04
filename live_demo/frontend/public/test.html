@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Connection Test</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .test {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #444;
+            border-radius: 5px;
+        }
+        .success { background: #1a4d1a; }
+        .error { background: #4d1a1a; }
+        .pending { background: #4d4d1a; }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            margin: 10px 0;
+        }
+        pre {
+            background: #000;
+            padding: 10px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔧 Backend Connection Test</h1>
+    <p>This page tests if your phone can reach the backend through ngrok.</p>
+    
+    <button onclick="runTests()">▶️ Run Tests</button>
+    <button onclick="startStream()">📷 Start Camera Stream</button>
+    
+    <div id="results"></div>
+    
+    <script>
+        const results = document.getElementById('results');
+        
+        async function runTests() {
+            results.innerHTML = '<h2>Running tests...</h2>';
+            
+            // Test 1: Health check
+            await testEndpoint('GET', '/api/health', null, 'Health Check');
+            
+            // Test 2: Info endpoint
+            await testEndpoint('GET', '/api/info', null, 'Server Info');
+            
+            // Test 3: Latest frame
+            await testEndpoint('GET', '/api/latest', null, 'Latest Frame');
+            
+            results.innerHTML += '<h2>✅ All tests complete!</h2>';
+        }
+        
+        async function testEndpoint(method, url, body, name) {
+            const testDiv = document.createElement('div');
+            testDiv.className = 'test pending';
+            testDiv.innerHTML = `<strong>${name}</strong>: Testing ${method} ${url}...`;
+            results.appendChild(testDiv);
+            
+            const startTime = Date.now();
+            
+            try {
+                const options = {
+                    method,
+                    headers: { 'Content-Type': 'application/json' }
+                };
+                if (body) options.body = JSON.stringify(body);
+                
+                const response = await fetch(url, options);
+                const duration = Date.now() - startTime;
+                const data = await response.json();
+                
+                testDiv.className = 'test success';
+                testDiv.innerHTML = `
+                    <strong>${name}</strong>: ✅ SUCCESS (${duration}ms)<br>
+                    <strong>Status:</strong> ${response.status}<br>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+            } catch (error) {
+                const duration = Date.now() - startTime;
+                testDiv.className = 'test error';
+                testDiv.innerHTML = `
+                    <strong>${name}</strong>: ❌ FAILED (${duration}ms)<br>
+                    <strong>Error:</strong> ${error.message}
+                `;
+            }
+        }
+        
+        async function startStream() {
+            results.innerHTML = '<h2>📷 Starting camera stream...</h2>';
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: 640, height: 480 }
+                });
+                
+                results.innerHTML += '<div class="test success">✅ Camera access granted!</div>';
+                
+                // Create video element
+                const video = document.createElement('video');
+                video.srcObject = stream;
+                video.autoplay = true;
+                video.playsInline = true;
+                video.style.width = '100%';
+                video.style.maxWidth = '640px';
+                results.appendChild(video);
+                
+                // Send test frame
+                video.onloadedmetadata = async () => {
+                    await video.play();
+                    
+                    setTimeout(async () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        canvas.getContext('2d').drawImage(video, 0, 0);
+                        
+                        const imageData = canvas.toDataURL('image/jpeg', 0.5);
+                        
+                        results.innerHTML += '<div class="test pending">📤 Sending test frame...</div>';
+                        
+                        await testEndpoint('POST', '/api/frame', { image: imageData }, 'Send Frame');
+                    }, 1000);
+                };
+                
+            } catch (error) {
+                results.innerHTML += `<div class="test error">❌ Camera error: ${error.message}</div>`;
+            }
+        }
+        
+        // Auto-run tests on load
+        window.onload = () => {
+            setTimeout(runTests, 500);
+        };
+    </script>
+</body>
+</html>
+

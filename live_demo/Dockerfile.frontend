@@ -1,0 +1,22 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files FIRST (changes least frequently)
+COPY live_demo/frontend/package.json ./
+
+# Install dependencies (will be cached unless package files change)
+RUN npm install --silent
+
+# Copy config files (change infrequently)
+COPY live_demo/frontend/vite.config.js ./
+COPY live_demo/frontend/tailwind.config.js ./
+COPY live_demo/frontend/postcss.config.js ./
+COPY live_demo/frontend/index.html ./
+
+# Copy source code (changes most frequently - do this last)
+COPY live_demo/frontend/src ./src
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev", "--", "--host"]

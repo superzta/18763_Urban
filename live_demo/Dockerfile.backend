@@ -1,0 +1,46 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install system dependencies for OpenCV
+RUN apt-get update && apt-get install -y \
+    libgl1 \
+    libglib2.0-0 \
+    curl \
+    wget \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install requirements FIRST (changes least frequently)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install additional backend requirements (separate for better caching)
+RUN pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    python-multipart==0.0.6 \
+    websockets==12.0 \
+    pyngrok==7.0.1
+
+# Create app structure
+RUN mkdir -p /app/checkpoints /app/live_demo/backend
+
+# Copy model files (large, change infrequently)
+COPY checkpoints/best_model_rcnn_v2.pth /app/checkpoints/best_model_rcnn_v2.pth
+COPY checkpoints/fcos_best_model.pth /app/checkpoints/fcos_best_model.pth
+
+# Copy model definition files (change infrequently)
+COPY rcnn.py /app/
+COPY fcos.py /app/
+COPY retinanet.py /app/
+
+# Copy backend code (changes more frequently - do this last)
+COPY live_demo/__init__.py /app/live_demo/
+COPY live_demo/backend/ /app/live_demo/backend/
+
+# Expose port
+EXPOSE 8000
+
+# Run the application with auto-reload for development
+CMD ["uvicorn", "live_demo.backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

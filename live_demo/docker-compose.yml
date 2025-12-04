@@ -1,0 +1,39 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: live_demo/Dockerfile.backend
+      # Use BuildKit for better caching
+      cache_from:
+        - backend:latest
+    image: backend:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      # Only mount the backend code for hot-reload (not the entire project)
+      - ./backend:/app/live_demo/backend
+      - ../checkpoints:/app/checkpoints
+    environment:
+      - PYTHONPATH=/app
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN:-}
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: live_demo/Dockerfile.frontend
+      cache_from:
+        - frontend:latest
+    image: frontend:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      # Only mount source code for hot-reload
+      - ./frontend/src:/app/src
+      # Mount vite config for proxy changes
+      - ./frontend/vite.config.js:/app/vite.config.js
+    environment:
+      - VITE_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
